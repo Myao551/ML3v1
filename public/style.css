@@ -565,12 +565,12 @@ body {
   margin: 5px 0;
 }
 
-/* 聊天框 */
+/* 聊天框 - 移到左上角避免遮挡手牌 */
 .chat-box {
   position: fixed;
-  bottom: 180px;
-  right: 10px;
-  width: 260px;
+  top: 10px;
+  left: 10px;
+  width: 220px;
   background: rgba(0, 0, 0, 0.85);
   border-radius: 10px;
   overflow: hidden;
@@ -628,15 +628,17 @@ body {
   margin: 15px 0;
 }
 
-/* 底牌面板 - 移到上方不挡牌 */
+/* 底牌面板 - 移到最上方不挡牌 */
 #bottom-cards-panel {
-  position: absolute;
-  top: 10px;
+  position: fixed;
+  top: 5px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.95);
   z-index: 200;
-  max-width: 90vw;
+  max-width: 95vw;
+  max-height: 180px;
+  overflow-y: auto;
 }
 
 #bottom-cards-panel .cards-display {
