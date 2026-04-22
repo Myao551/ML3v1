@@ -104,6 +104,11 @@ function init() {
     elements.readyBtn.disabled = false;
     // 重置底牌面板状态
     gameState.exchangePanelShown = false;
+    // 恢复出牌按钮的事件绑定
+    const newPlayBtn = elements.playBtn.cloneNode(true);
+    elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
+    elements.playBtn = newPlayBtn;
+    elements.playBtn.addEventListener('click', playCards);
   });
 
   // 叫分按钮
@@ -208,6 +213,12 @@ function connectSocket() {
     elements.gameStatus.textContent = '游戏中';
     gameState.currentPlayer = data.currentPlayer;
     updateCurrentPlayer(data.currentPlayer);
+
+    // 恢复出牌按钮的事件绑定
+    const newPlayBtn = elements.playBtn.cloneNode(true);
+    elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
+    elements.playBtn = newPlayBtn;
+    elements.playBtn.addEventListener('click', playCards);
   });
 
   gameState.socket.on('cards-played', (data) => {
@@ -658,8 +669,13 @@ function showExchangePanel(bottomCards) {
   elements.playBtn.classList.remove('hidden');
   elements.playBtn.textContent = '确定底牌';
 
-  // 更改点击事件
-  elements.playBtn.onclick = () => {
+  // 克隆按钮以清除之前的事件监听器
+  const newPlayBtn = elements.playBtn.cloneNode(true);
+  elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
+  elements.playBtn = newPlayBtn;
+
+  // 绑定新的点击事件
+  elements.playBtn.addEventListener('click', () => {
     // 直接从DOM获取选中的牌数量
     const selectedCards = document.querySelectorAll('.card.selected');
     const selectedCount = selectedCards.length;
@@ -696,7 +712,7 @@ function showExchangePanel(bottomCards) {
     selectedCards.forEach(el => el.classList.remove('selected'));
 
     addChatMessage('系统', '底牌已确定，等待叫主...');
-  };
+  });
 }
 
 // 重置底牌面板状态（用于新一局）
