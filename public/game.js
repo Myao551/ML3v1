@@ -449,6 +449,7 @@ function createCardElement(card, index) {
 
 // 切换牌选择
 function toggleCardSelection(card, cardEl) {
+  console.log('Toggle selection:', card.id, card);
   const index = gameState.selectedCards.findIndex(c => c.id === card.id);
 
   if (index === -1) {
@@ -458,6 +459,8 @@ function toggleCardSelection(card, cardEl) {
     gameState.selectedCards.splice(index, 1);
     cardEl.classList.remove('selected');
   }
+
+  console.log('Selected cards count:', gameState.selectedCards.length);
 
   // 更新按钮状态（底牌选择阶段始终显示按钮）
   if (elements.playBtn.textContent === '确定底牌') {
