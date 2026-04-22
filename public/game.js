@@ -15,7 +15,8 @@ const gameState = {
   isDealer: false,
   trumpSuit: null,
   isNoTrump: false,
-  bottomCards: []
+  bottomCards: [],
+  exchangePanelShown: false
 };
 
 // DOM元素
@@ -101,6 +102,8 @@ function init() {
     elements.readyBtn.classList.remove('hidden');
     elements.readyBtn.textContent = '准备';
     elements.readyBtn.disabled = false;
+    // 重置底牌面板状态
+    gameState.exchangePanelShown = false;
   });
 
   // 叫分按钮
@@ -583,6 +586,13 @@ function showBottomCards(cards) {
 
 // 显示换牌面板 - 底牌加入手牌，选择8张作为新底牌
 function showExchangePanel(bottomCards) {
+  // 防止重复调用
+  if (gameState.exchangePanelShown) {
+    console.log('Exchange panel already shown, ignoring duplicate call');
+    return;
+  }
+  gameState.exchangePanelShown = true;
+
   // 底牌加入庄家手牌
   gameState.hand = gameState.hand.concat(bottomCards);
   gameState.bottomCards = []; // 清空底牌，等待选择
@@ -651,6 +661,11 @@ function showExchangePanel(bottomCards) {
 
     addChatMessage('系统', '底牌已确定，等待叫主...');
   };
+}
+
+// 重置底牌面板状态（用于新一局）
+function resetExchangePanel() {
+  gameState.exchangePanelShown = false;
 }
 
 // 完成交换（保留函数兼容性）
