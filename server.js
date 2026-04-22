@@ -254,10 +254,10 @@ io.on('connection', (socket) => {
         winner.isDealer = true;
         room.dealer = room.currentBidder;
         room.dealerScore = room.currentBid;
-        room.state = 'choosing-trump';
+        room.state = 'exchanging';
 
-        // 给庄家看底牌
-        io.to(winner.id).emit('show-bottom-cards', room.bottomCards);
+        // 底牌加入庄家手牌，让庄家选8张作为新底牌
+        io.to(winner.id).emit('exchange-cards', room.bottomCards);
       }
     } else {
       room.currentBid = bid;
@@ -270,8 +270,9 @@ io.on('connection', (socket) => {
         room.dealer = room.currentBidder - 1;
         if (room.dealer < 0) room.dealer = 3;
         room.dealerScore = 75;
-        room.state = 'choosing-trump';
-        io.to(currentPlayer.id).emit('show-bottom-cards', room.bottomCards);
+        room.state = 'exchanging';
+        // 底牌加入庄家手牌，让庄家选8张作为新底牌
+        io.to(currentPlayer.id).emit('exchange-cards', room.bottomCards);
       }
     }
 
@@ -294,7 +295,8 @@ io.on('connection', (socket) => {
 
     room.trumpSuit = suit;
     room.isNoTrump = isNoTrump;
-    room.state = 'exchanging';
+    room.state = 'playing';
+    room.currentPlayer = room.dealer;
 
     // 重新排序所有玩家的手牌（主牌优先，同花色，牌大小）
     for (const player of room.players) {
@@ -303,37 +305,38 @@ io.on('connection', (socket) => {
       io.to(player.id).emit('hand-sorted', player.hand);
     }
 
-    // 通知所有玩家主牌
+    // 通知所有玩家主牌和游戏开始
     io.to(room.id).emit('trump-chosen', {
       trumpSuit: suit,
       isNoTrump: isNoTrump,
       dealer: room.dealer
     });
 
-    // 让庄家换牌
-    io.to(dealer.id).emit('exchange-cards', room.bottomCards);
+    // 开始游戏
+    io.to(room.id).emit('game-start', {
+      currentPlayer: room.currentPlayer,
+      trumpSuit: room.trumpSuit,
+      isNoTrump: room.isNoTrump
+    });
   });
 
-  // 完成换牌
-  socket.on('finish-exchange', (discardedCards) => {
+  // 完成底牌选择
+  socket.on('finish-exchange', (newBottomCards) => {
     const room = rooms.get(socket.roomId);
     if (!room || room.state !== 'exchanging') return;
 
     const dealer = room.players[room.dealer];
     if (dealer.id !== socket.id) return;
 
-    // 将弃牌放回底牌
-    room.bottomCards = discardedCards;
+    // 设置新底牌
+    room.bottomCards = newBottomCards;
 
-    // 开始游戏
-    room.state = 'playing';
-    room.currentPlayer = room.dealer;
+    // 进入叫主阶段
+    room.state = 'choosing-trump';
 
-    io.to(room.id).emit('game-start', {
-      currentPlayer: room.currentPlayer,
-      trumpSuit: room.trumpSuit,
-      isNoTrump: room.isNoTrump
-    });
+    // 通知庄家叫主
+    io.to(dealer.id).emit('choose-trump-request');
+    io.to(room.id).emit('waiting-trump', { dealer: room.dealer });
   });
 
   // 出牌

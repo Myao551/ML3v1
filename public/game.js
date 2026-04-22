@@ -183,8 +183,22 @@ function connectSocket() {
     addChatMessage('系统', `${gameState.players[data.dealer].name} 选择了 ${data.isNoTrump ? '无主' : getSuitName(data.trumpSuit)}`);
   });
 
+  // 底牌交换：底牌加入手牌，选择8张作为新底牌
   gameState.socket.on('exchange-cards', (cards) => {
     showExchangePanel(cards);
+  });
+
+  // 等待庄家叫主
+  gameState.socket.on('waiting-trump', (data) => {
+    if (data.dealer !== gameState.seat) {
+      addChatMessage('系统', '等待庄家选择主牌...');
+    }
+  });
+
+  // 庄家叫主请求
+  gameState.socket.on('choose-trump-request', () => {
+    elements.trumpPanel.classList.remove('hidden');
+    addChatMessage('系统', '请选择主牌！');
   });
 
   gameState.socket.on('game-start', (data) => {
@@ -595,13 +609,12 @@ function showExchangePanel(bottomCards) {
     // 发送到底牌确定
     gameState.socket.emit('finish-exchange', gameState.bottomCards);
 
-    // 重置UI
+    // 重置UI（但保留按钮文字，因为接下来要叫主）
     elements.playBtn.classList.add('hidden');
-    elements.playBtn.textContent = '出牌';
     gameState.selectedCards = [];
     document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
 
-    addChatMessage('系统', '底牌已确定，游戏开始！');
+    addChatMessage('系统', '底牌已确定，等待叫主...');
   };
 }
 
