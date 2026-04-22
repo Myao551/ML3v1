@@ -209,6 +209,11 @@ function subscribeToRoom() {
     renderHand();
   });
 
+  gameState.channel.bind('game-started', (data) => {
+    gameState.currentBidder = data.currentBidder;
+    updateCurrentBidder(data.currentBidder);
+  });
+
   gameState.privateChannel.bind('show-bottom-cards', (cards) => {
     addChatMessage('系统', `你看到了底牌: ${cards.length}张`);
   });
@@ -325,7 +330,9 @@ function onGameStarted(data) {
   elements.bidHistory.classList.remove('hidden');
   elements.scorePanel.classList.remove('hidden');
   elements.targetScore.textContent = data.currentBid;
+  gameState.currentBidder = data.currentBidder;
   updateBidButtons(data.currentBid);
+  updateCurrentBidder(data.currentBidder);
 }
 
 function renderHand() {
@@ -412,9 +419,27 @@ async function placeBid(bid) {
   }
 }
 
+function updateCurrentBidder(bidderIndex) {
+  const currentPlayer = gameState.players[bidderIndex];
+  if (currentPlayer && currentPlayer.id === gameState.playerId) {
+    elements.bidPanel.classList.remove('hidden');
+    addChatMessage('系统', '轮到你了，请叫分！');
+  } else {
+    elements.bidPanel.classList.add('hidden');
+  }
+
+  // 高亮显示当前叫分者
+  document.querySelectorAll('.player-seat').forEach(seat => seat.classList.remove('active'));
+  const relativeSeat = (bidderIndex - gameState.seat + 4) % 4;
+  const seatSelectors = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
+  const seatEl = document.querySelector(seatSelectors[relativeSeat]);
+  if (seatEl) seatEl.classList.add('active');
+}
+
 function onBidUpdate(data) {
   elements.targetScore.textContent = data.currentBid;
   updateBidButtons(data.currentBid);
+  gameState.currentBidder = data.currentBidder;
 
   elements.bidList.innerHTML = '';
   data.bidHistory.forEach(bid => {
@@ -423,8 +448,7 @@ function onBidUpdate(data) {
     elements.bidList.appendChild(li);
   });
 
-  const currentPlayer = gameState.players[data.currentBidder];
-  elements.bidPanel.classList.toggle('hidden', !(currentPlayer && currentPlayer.id === gameState.playerId));
+  updateCurrentBidder(data.currentBidder);
 
   if (data.state === 'choosing-trump' && data.dealer === gameState.seat) {
     elements.bidPanel.classList.add('hidden');

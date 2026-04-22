@@ -154,7 +154,10 @@ function connectSocket() {
     elements.bidHistory.classList.remove('hidden');
     elements.scorePanel.classList.remove('hidden');
     elements.targetScore.textContent = data.currentBid;
+    gameState.currentBidder = data.currentBidder;
     updateBidButtons(data.currentBid);
+    // 显示叫分面板给当前叫分者
+    updateCurrentBidder(data.currentBidder);
   });
 
   gameState.socket.on('bid-update', (data) => {
@@ -472,9 +475,27 @@ function updateBidButtons(currentBid) {
 }
 
 // 更新叫分显示
+function updateCurrentBidder(bidderIndex) {
+  const currentPlayer = gameState.players[bidderIndex];
+  if (currentPlayer && currentPlayer.id === gameState.playerId) {
+    elements.bidPanel.classList.remove('hidden');
+    addChatMessage('系统', '轮到你了，请叫分！');
+  } else {
+    elements.bidPanel.classList.add('hidden');
+  }
+
+  // 高亮显示当前叫分者
+  document.querySelectorAll('.player-seat').forEach(seat => seat.classList.remove('active'));
+  const relativeSeat = (bidderIndex - gameState.seat + 4) % 4;
+  const seatSelectors = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
+  const seatEl = document.querySelector(seatSelectors[relativeSeat]);
+  if (seatEl) seatEl.classList.add('active');
+}
+
 function updateBidDisplay(data) {
   elements.targetScore.textContent = data.currentBid;
   updateBidButtons(data.currentBid);
+  gameState.currentBidder = data.currentBidder;
 
   // 更新叫分记录
   elements.bidList.innerHTML = '';
@@ -485,12 +506,7 @@ function updateBidDisplay(data) {
   });
 
   // 检查是否轮到自己
-  const currentPlayer = gameState.players[data.currentBidder];
-  if (currentPlayer && currentPlayer.id === gameState.playerId) {
-    elements.bidPanel.classList.remove('hidden');
-  } else {
-    elements.bidPanel.classList.add('hidden');
-  }
+  updateCurrentBidder(data.currentBidder);
 
   // 如果是选择主牌阶段
   if (data.state === 'choosing-trump') {
