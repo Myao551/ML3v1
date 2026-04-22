@@ -578,6 +578,32 @@ function showExchangePanel(bottomCards) {
   gameState.hand = gameState.hand.concat(bottomCards);
   gameState.bottomCards = []; // 清空底牌，等待选择
 
+  // 对手牌进行排序（无主时：常主优先，红黑相间）
+  gameState.hand.sort((a, b) => {
+    const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+    const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 };
+
+    // 大王、小王最前
+    if (a.rank === 'big') return -1;
+    if (b.rank === 'big') return 1;
+    if (a.rank === 'small') return -1;
+    if (b.rank === 'small') return 1;
+
+    // 然后是7和2（常主）
+    const aIsConstantTrump = a.rank === '7' || a.rank === '2';
+    const bIsConstantTrump = b.rank === '7' || b.rank === '2';
+    if (aIsConstantTrump && !bIsConstantTrump) return -1;
+    if (!aIsConstantTrump && bIsConstantTrump) return 1;
+    if (aIsConstantTrump && bIsConstantTrump) {
+      if (a.rank !== b.rank) return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+      return suitOrder[b.suit] - suitOrder[a.suit];
+    }
+
+    // 其他牌：红黑相间，同花色内按大小
+    if (a.suit !== b.suit) return suitOrder[b.suit] - suitOrder[a.suit];
+    return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+  });
+
   // 重新渲染手牌（33张）
   renderHand();
 
