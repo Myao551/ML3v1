@@ -20,11 +20,11 @@ const rooms = new Map();
 
 // 扑克牌定义
 const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
-const RANKS = ['5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const TRUMP_RANKS = ['2', '7'];
 const JOKERS = [{ suit: 'joker', rank: 'big', name: '大王' }, { suit: 'joker', rank: 'small', name: '小王' }];
 
-// 创建两副牌（去掉3和4）
+// 创建两副牌（108张，不去掉3和4）
 function createDeck() {
   const deck = [];
   // 两副普通牌
@@ -80,12 +80,12 @@ function getCardValue(card, trumpSuit, isNoTrump) {
 
   // 主牌其他
   if (card.suit === trumpSuit && !isNoTrump) {
-    const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5 };
+    const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
     return 50 + rankValue[card.rank];
   }
 
   // 副牌
-  const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5 };
+  const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
   return rankValue[card.rank];
 }
 
@@ -397,13 +397,13 @@ function startGame(room) {
   room.state = 'bidding';
   room.deck = shuffle(createDeck());
 
-  // 发牌：每人21张，8张底牌
+  // 发牌：每人25张，8张底牌 (共108张)
   room.bottomCards = room.deck.slice(0, 8);
   let cardIndex = 8;
 
   for (let i = 0; i < 4; i++) {
-    room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 21);
-    cardIndex += 21;
+    room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
+    cardIndex += 25;
 
     // 排序手牌
     room.players[i].hand.sort((a, b) => {

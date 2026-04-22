@@ -137,11 +137,11 @@ async function startGame(roomId, headers) {
   room.state = 'bidding';
   const deck = createAndShuffleDeck();
 
-  // 发牌
+  // 发牌：每人25张，8张底牌 (共108张)
   room.players.forEach((player, i) => {
-    player.hand = deck.slice(i * 21, (i + 1) * 21);
+    player.hand = deck.slice(i * 25, (i + 1) * 25);
   });
-  room.bottomCards = deck.slice(84, 92);
+  room.bottomCards = deck.slice(100, 108);
 
   await pusher.trigger(`room-${roomId}`, 'game-started', {
     currentBidder: room.currentBidder,
@@ -352,7 +352,7 @@ function getRoomState(room) {
 // 创建和洗牌
 function createAndShuffleDeck() {
   const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
-  const ranks = ['5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+  const ranks = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
   const trumps = ['2', '7'];
 
   const deck = [];
