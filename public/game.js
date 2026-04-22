@@ -435,12 +435,6 @@ function createCardElement(card, index) {
 
 // 切换牌选择
 function toggleCardSelection(card, cardEl) {
-  // 如果在交换阶段，使用交换逻辑
-  if (gameState.currentState === 'exchanging') {
-    toggleExchangeCard(card, cardEl, 'hand');
-    return;
-  }
-
   const index = gameState.selectedCards.findIndex(c => c.id === card.id);
 
   if (index === -1) {
@@ -451,10 +445,10 @@ function toggleCardSelection(card, cardEl) {
     cardEl.classList.remove('selected');
   }
 
-  // 显示/隐藏出牌按钮
+  // 显示/隐藏出牌按钮（仅在需要时）
   if (gameState.selectedCards.length > 0) {
     elements.playBtn.classList.remove('hidden');
-  } else {
+  } else if (elements.playBtn.textContent === '出牌') {
     elements.playBtn.classList.add('hidden');
   }
 }
@@ -564,99 +558,56 @@ function showBottomCards(cards) {
   elements.bottomCardsPanel.classList.remove('hidden');
 }
 
-// 显示换牌面板 - 庄家可以用手牌替换底牌
+// 显示换牌面板 - 底牌加入手牌，选择8张作为新底牌
 function showExchangePanel(bottomCards) {
-  // 保存底牌
-  gameState.bottomCards = bottomCards;
+  // 底牌加入庄家手牌
+  gameState.hand = gameState.hand.concat(bottomCards);
+  gameState.bottomCards = []; // 清空底牌，等待选择
 
-  // 显示底牌区域，可点击选择要换入的底牌
-  elements.bottomCardsDisplay.innerHTML = '';
-  bottomCards.forEach((card, index) => {
-    const cardEl = createCardElement(card, index);
-    cardEl.style.width = '45px';
-    cardEl.style.height = '63px';
-    cardEl.classList.add('bottom-card');
-    cardEl.dataset.fromBottom = 'true';
-    cardEl.onclick = () => toggleExchangeCard(card, cardEl, 'bottom');
-    elements.bottomCardsDisplay.appendChild(cardEl);
-  });
+  // 重新渲染手牌（33张）
+  renderHand();
 
-  elements.bottomCardsPanel.querySelector('h3').textContent = '点击选择要换入的底牌，再点击手牌进行交换';
-  elements.bottomCardsPanel.classList.remove('hidden');
+  // 显示提示
+  addChatMessage('系统', '底牌已加入你的手牌，请选择8张作为新底牌');
+
+  // 重置选择
+  gameState.selectedCards = [];
+
+  // 更改出牌按钮为确定底牌
   elements.playBtn.classList.remove('hidden');
-  elements.playBtn.textContent = '完成换牌';
+  elements.playBtn.textContent = '确定底牌';
 
-  // 重置选择状态
-  gameState.selectedBottomCards = [];
-  gameState.selectedHandCards = [];
-
-  // 更改出牌按钮为完成换牌
+  // 更改点击事件
   elements.playBtn.onclick = () => {
-    // 计算交换
-    const exchangeCount = Math.min(gameState.selectedBottomCards.length, gameState.selectedHandCards.length);
-
-    if (exchangeCount === 0) {
-      // 没有交换，直接确定
-      finishExchange([]);
+    if (gameState.selectedCards.length !== 8) {
+      alert(`请选择8张牌作为底牌（已选择${gameState.selectedCards.length}张）`);
       return;
     }
 
-    // 执行交换
-    for (let i = 0; i < exchangeCount; i++) {
-      const bottomCard = gameState.selectedBottomCards[i];
-      const handCard = gameState.selectedHandCards[i];
+    // 将选中的牌作为底牌
+    gameState.bottomCards = gameState.selectedCards;
 
-      // 从手牌移除，加入底牌
-      const handIdx = gameState.hand.findIndex(c => c.id === handCard.id);
-      if (handIdx !== -1) {
-        gameState.hand.splice(handIdx, 1);
-        gameState.bottomCards.push(handCard);
-      }
+    // 从手牌中移除选中的牌
+    gameState.hand = gameState.hand.filter(c =>
+      !gameState.selectedCards.some(sc => sc.id === c.id)
+    );
 
-      // 从底牌移除，加入手牌
-      const bottomIdx = gameState.bottomCards.findIndex(c => c.id === bottomCard.id);
-      if (bottomIdx !== -1) {
-        gameState.bottomCards.splice(bottomIdx, 1);
-        gameState.hand.push(bottomCard);
-      }
-    }
+    // 发送到底牌确定
+    gameState.socket.emit('finish-exchange', gameState.bottomCards);
 
-    finishExchange(gameState.bottomCards);
+    // 重置UI
+    elements.playBtn.classList.add('hidden');
+    elements.playBtn.textContent = '出牌';
+    gameState.selectedCards = [];
+    document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
+
+    addChatMessage('系统', '底牌已确定，游戏开始！');
   };
 }
 
-// 切换交换选择
-function toggleExchangeCard(card, cardEl, from) {
-  if (from === 'bottom') {
-    const idx = gameState.selectedBottomCards.findIndex(c => c.id === card.id);
-    if (idx === -1) {
-      gameState.selectedBottomCards.push(card);
-      cardEl.classList.add('selected');
-    } else {
-      gameState.selectedBottomCards.splice(idx, 1);
-      cardEl.classList.remove('selected');
-    }
-  } else {
-    const idx = gameState.selectedHandCards.findIndex(c => c.id === card.id);
-    if (idx === -1) {
-      gameState.selectedHandCards.push(card);
-      cardEl.classList.add('selected');
-    } else {
-      gameState.selectedHandCards.splice(idx, 1);
-      cardEl.classList.remove('selected');
-    }
-  }
-}
-
-// 完成交换
+// 完成交换（保留函数兼容性）
 function finishExchange(newBottomCards) {
-  gameState.socket.emit('finish-exchange', newBottomCards);
-  elements.bottomCardsPanel.classList.add('hidden');
-  elements.playBtn.classList.add('hidden');
-  elements.playBtn.textContent = '出牌';
-  gameState.selectedBottomCards = [];
-  gameState.selectedHandCards = [];
-  renderHand();
+  // 此函数现在由showExchangePanel内部处理
 }
 
 // 显示出的牌
