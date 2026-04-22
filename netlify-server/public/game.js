@@ -221,8 +221,12 @@ function subscribeToRoom() {
     addChatMessage('系统', `你看到了底牌: ${cards.length}张`);
   });
 
-  gameState.privateChannel.bind('exchange-cards', () => {
-    addChatMessage('系统', '请选择8张牌作为底牌');
+  gameState.privateChannel.bind('exchange-cards', (cards) => {
+    gameState.bottomCards = cards;
+    addChatMessage('系统', `你看到了${cards.length}张底牌，可以选择手牌进行交换`);
+    // 简单交换：选中的手牌与底牌交换
+    elements.playBtn.classList.remove('hidden');
+    elements.playBtn.textContent = '换牌';
   });
 }
 
