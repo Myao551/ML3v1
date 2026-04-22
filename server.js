@@ -61,6 +61,40 @@ function getCardScore(card) {
   return 0;
 }
 
+// 判断是否为当前主牌（包括常主和主牌花色）
+function isTrumpCard(card, trumpSuit, isNoTrump) {
+  if (card.suit === 'joker') return true; // 大小王是常主
+  if (card.rank === '2' || card.rank === '7') return true; // 2和7是常主
+  if (!isNoTrump && card.suit === trumpSuit) return true; // 主牌花色
+  return false;
+}
+
+// 手牌显示排序：主牌优先 -> 同花色 -> 牌大小
+function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
+  const aIsTrump = isTrumpCard(a, trumpSuit, isNoTrump);
+  const bIsTrump = isTrumpCard(b, trumpSuit, isNoTrump);
+
+  // 1. 主牌放前面
+  if (aIsTrump && !bIsTrump) return -1;
+  if (!aIsTrump && bIsTrump) return 1;
+
+  // 2. 同花色放一起
+  if (a.suit !== b.suit) {
+    // 主牌花色放最前面（在常主之后）
+    if (!isNoTrump) {
+      if (a.suit === trumpSuit && b.suit !== trumpSuit) return -1;
+      if (a.suit !== trumpSuit && b.suit === trumpSuit) return 1;
+    }
+    return a.suit.localeCompare(b.suit);
+  }
+
+  // 3. 相同花色内按牌大小排序（从大到小）
+  const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+  const aValue = rankOrder[a.rank] || 0;
+  const bValue = rankOrder[b.rank] || 0;
+  return bValue - aValue;
+}
+
 // 获取牌的大小（用于比较）
 function getCardValue(card, trumpSuit, isNoTrump) {
   const suitOrder = { 'spades': 3, 'hearts': 2, 'diamonds': 1, 'clubs': 0 };
@@ -261,6 +295,13 @@ io.on('connection', (socket) => {
     room.isNoTrump = isNoTrump;
     room.state = 'exchanging';
 
+    // 重新排序所有玩家的手牌（主牌优先，同花色，牌大小）
+    for (const player of room.players) {
+      player.hand.sort((a, b) => sortCardsForDisplay(a, b, suit, isNoTrump));
+      // 发送排序后的手牌给玩家
+      io.to(player.id).emit('hand-sorted', player.hand);
+    }
+
     // 通知所有玩家主牌
     io.to(room.id).emit('trump-chosen', {
       trumpSuit: suit,
@@ -405,12 +446,18 @@ function startGame(room) {
     room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
     cardIndex += 25;
 
-    // 排序手牌
+    // 初始排序：常主优先，同花色，牌大小
     room.players[i].hand.sort((a, b) => {
-      if (a.isTrump && !b.isTrump) return -1;
-      if (!a.isTrump && b.isTrump) return 1;
+      // 常主（王、2、7）放前面
+      const aIsTrump = a.isTrump || a.suit === 'joker';
+      const bIsTrump = b.isTrump || b.suit === 'joker';
+      if (aIsTrump && !bIsTrump) return -1;
+      if (!aIsTrump && bIsTrump) return 1;
+      // 同花色
       if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-      return getCardValue(b, null, true) - getCardValue(a, null, true);
+      // 牌大小
+      const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+      return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
     });
 
     // 发送手牌给玩家

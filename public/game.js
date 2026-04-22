@@ -143,6 +143,12 @@ function connectSocket() {
     addChatMessage('系统', '游戏开始，你已收到手牌');
   });
 
+  // 主牌确定后，手牌重新排序
+  gameState.socket.on('hand-sorted', (cards) => {
+    gameState.hand = cards;
+    renderHand();
+  });
+
   gameState.socket.on('game-started', (data) => {
     elements.gameStatus.textContent = '叫分阶段';
     elements.bidHistory.classList.remove('hidden');

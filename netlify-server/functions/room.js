@@ -140,6 +140,16 @@ async function startGame(roomId, headers) {
   // 发牌：每人25张，8张底牌 (共108张)
   room.players.forEach((player, i) => {
     player.hand = deck.slice(i * 25, (i + 1) * 25);
+    // 初始排序：常主优先，同花色，牌大小
+    player.hand.sort((a, b) => {
+      const aIsTrump = a.isTrump || a.suit === 'joker';
+      const bIsTrump = b.isTrump || b.suit === 'joker';
+      if (aIsTrump && !bIsTrump) return -1;
+      if (!aIsTrump && bIsTrump) return 1;
+      if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
+      const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+      return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+    });
   });
   room.bottomCards = deck.slice(100, 108);
 
@@ -210,6 +220,12 @@ async function chooseTrump(roomId, playerId, suit, isNoTrump, headers) {
   room.trumpSuit = suit;
   room.isNoTrump = isNoTrump;
   room.state = 'exchanging';
+
+  // 重新排序所有玩家的手牌（主牌优先，同花色，牌大小）
+  for (const player of room.players) {
+    player.hand.sort((a, b) => sortCardsForDisplay(a, b, suit, isNoTrump));
+    await pusher.trigger(`private-${player.id}`, 'hand-sorted', player.hand);
+  }
 
   await pusher.trigger(`room-${roomId}`, 'trump-chosen', {
     trumpSuit: suit,
@@ -377,6 +393,36 @@ function createAndShuffleDeck() {
   }
 
   return deck;
+}
+
+// 判断是否为当前主牌（包括常主和主牌花色）
+function isTrumpCard(card, trumpSuit, isNoTrump) {
+  if (card.suit === 'joker') return true;
+  if (card.rank === '2' || card.rank === '7') return true;
+  if (!isNoTrump && card.suit === trumpSuit) return true;
+  return false;
+}
+
+// 手牌显示排序：主牌优先 -> 同花色 -> 牌大小
+function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
+  const aIsTrump = isTrumpCard(a, trumpSuit, isNoTrump);
+  const bIsTrump = isTrumpCard(b, trumpSuit, isNoTrump);
+
+  if (aIsTrump && !bIsTrump) return -1;
+  if (!aIsTrump && bIsTrump) return 1;
+
+  if (a.suit !== b.suit) {
+    if (!isNoTrump) {
+      if (a.suit === trumpSuit && b.suit !== trumpSuit) return -1;
+      if (a.suit !== trumpSuit && b.suit === trumpSuit) return 1;
+    }
+    return a.suit.localeCompare(b.suit);
+  }
+
+  const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+  const aValue = rankOrder[a.rank] || 0;
+  const bValue = rankOrder[b.rank] || 0;
+  return bValue - aValue;
 }
 
 function getCardScore(card) {

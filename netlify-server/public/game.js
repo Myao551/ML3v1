@@ -203,6 +203,12 @@ function subscribeToRoom() {
     addChatMessage('系统', '游戏开始，你已收到手牌');
   });
 
+  // 主牌确定后，手牌重新排序
+  gameState.privateChannel.bind('hand-sorted', (cards) => {
+    gameState.hand = cards;
+    renderHand();
+  });
+
   gameState.privateChannel.bind('show-bottom-cards', (cards) => {
     addChatMessage('系统', `你看到了底牌: ${cards.length}张`);
   });
