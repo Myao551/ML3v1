@@ -14,12 +14,15 @@ const gameState = {
   seat: 0,
   hand: [],
   selectedCards: [],
+  selectedBottomCards: [],
+  selectedHandCards: [],
   currentState: 'waiting',
   players: [],
   currentPlayer: 0,
   isDealer: false,
   trumpSuit: null,
-  isNoTrump: false
+  isNoTrump: false,
+  bottomCards: []
 };
 
 // DOM元素
