@@ -628,6 +628,22 @@ body {
   margin: 15px 0;
 }
 
+/* 底牌面板 - 移到上方不挡牌 */
+#bottom-cards-panel {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 200;
+  max-width: 90vw;
+}
+
+#bottom-cards-panel .cards-display {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
 /* 游戏结果 */
 #result-content {
   text-align: center;

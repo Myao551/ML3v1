@@ -89,10 +89,23 @@ function getCardDisplayValue(card, trumpSuit, isNoTrump) {
   return suitOrder[card.suit] * 20 + (rankValue[card.rank] || 0);
 }
 
-// 手牌显示排序
+// 手牌显示排序 - 主牌优先，副牌红黑相间
 function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
+  // 首先按显示值排序（主牌在前）
   const aValue = getCardDisplayValue(a, trumpSuit, isNoTrump);
   const bValue = getCardDisplayValue(b, trumpSuit, isNoTrump);
+
+  // 如果都在副牌区域（<500），按红黑相间排序
+  if (aValue < 500 && bValue < 500) {
+    const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 }; // 黑桃(黑)、红桃(红)、梅花(黑)、方片(红)
+    if (a.suit !== b.suit) {
+      return suitOrder[b.suit] - suitOrder[a.suit];
+    }
+    // 同花色按大小
+    const rankOrder = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
+    return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+  }
+
   return bValue - aValue;
 }
 
@@ -450,10 +463,11 @@ function startGame(room) {
     room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
     cardIndex += 25;
 
-    // 初始排序（无主时）：常主(2、7、王)优先
+    // 初始排序（无主时）：常主(2、7、王)优先，副牌红黑相间
     room.players[i].hand.sort((a, b) => {
       const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-      const suitOrder = { 'spades': 4, 'hearts': 3, 'diamonds': 2, 'clubs': 1 };
+      // 红黑相间：黑桃(黑)、红桃(红)、梅花(黑)、方片(红) -> 但按黑红顺序排列
+      const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 };
 
       // 大王、小王最前
       if (a.rank === 'big') return -1;
@@ -471,7 +485,7 @@ function startGame(room) {
         return suitOrder[b.suit] - suitOrder[a.suit];
       }
 
-      // 其他牌：按花色，再按大小
+      // 副牌：红黑相间排列（黑桃、红桃、梅花、方片），同花色内按大小
       if (a.suit !== b.suit) return suitOrder[b.suit] - suitOrder[a.suit];
       return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
     });
