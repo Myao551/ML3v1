@@ -1,0 +1,11 @@
+{
+  "name": "sanda1-poker-game-netlify",
+  "version": "1.0.0",
+  "description": "三打一扑克游戏 - Netlify Serverless 版本",
+  "scripts": {
+    "build": "echo 'Build complete'"
+  },
+  "dependencies": {
+    "pusher": "^5.1.3"
+  }
+}
