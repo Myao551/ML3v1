@@ -565,11 +565,11 @@ body {
   margin: 5px 0;
 }
 
-/* 聊天框 - 移到左上角避免遮挡手牌 */
+/* 聊天框 - 移到右上角避免遮挡 */
 .chat-box {
   position: fixed;
-  top: 10px;
-  left: 10px;
+  top: 60px;
+  right: 10px;
   width: 220px;
   background: rgba(0, 0, 0, 0.85);
   border-radius: 10px;
