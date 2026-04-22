@@ -452,20 +452,22 @@ function createCardElement(card, index) {
 
 // 切换牌选择
 function toggleCardSelection(card, cardEl) {
-  console.log('Toggle selection:', card.id, card);
-  const index = gameState.selectedCards.findIndex(c => c.id === card.id);
+  const cardId = card.id || cardEl.dataset.cardId;
+  console.log('Toggle selection:', cardId, 'Current selected:', gameState.selectedCards.length);
+
+  const index = gameState.selectedCards.findIndex(c => c.id === cardId);
 
   if (index === -1) {
     gameState.selectedCards.push(card);
     cardEl.classList.add('selected');
+    console.log('Added card, now selected:', gameState.selectedCards.length);
   } else {
     gameState.selectedCards.splice(index, 1);
     cardEl.classList.remove('selected');
+    console.log('Removed card, now selected:', gameState.selectedCards.length);
   }
 
-  console.log('Selected cards count:', gameState.selectedCards.length);
-
-  // 更新按钮状态（底牌选择阶段始终显示按钮）
+  // 底牌选择阶段始终显示按钮
   if (elements.playBtn.textContent === '确定底牌') {
     elements.playBtn.classList.remove('hidden');
   } else if (gameState.selectedCards.length > 0) {
@@ -638,17 +640,31 @@ function showExchangePanel(bottomCards) {
 
   // 更改点击事件
   elements.playBtn.onclick = () => {
-    if (gameState.selectedCards.length !== 8) {
-      alert(`请选择8张牌作为底牌（已选择${gameState.selectedCards.length}张）`);
+    // 直接从DOM获取选中的牌数量
+    const selectedCards = document.querySelectorAll('.card.selected');
+    const selectedCount = selectedCards.length;
+    console.log('Confirm button clicked, selected count from DOM:', selectedCount);
+    console.log('Selected from gameState:', gameState.selectedCards.length);
+
+    if (selectedCount !== 8) {
+      alert(`请选择8张牌作为底牌（已选择${selectedCount}张）`);
       return;
     }
 
+    // 从DOM元素中获取选中的牌数据
+    const selectedCardsData = [];
+    selectedCards.forEach(el => {
+      const cardId = el.dataset.cardId;
+      const card = gameState.hand.find(c => c.id === cardId);
+      if (card) selectedCardsData.push(card);
+    });
+
     // 将选中的牌作为底牌
-    gameState.bottomCards = gameState.selectedCards;
+    gameState.bottomCards = selectedCardsData;
 
     // 从手牌中移除选中的牌
     gameState.hand = gameState.hand.filter(c =>
-      !gameState.selectedCards.some(sc => sc.id === c.id)
+      !selectedCardsData.some(sc => sc.id === c.id)
     );
 
     // 发送到底牌确定
@@ -657,7 +673,7 @@ function showExchangePanel(bottomCards) {
     // 重置UI（但保留按钮文字，因为接下来要叫主）
     elements.playBtn.classList.add('hidden');
     gameState.selectedCards = [];
-    document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
+    selectedCards.forEach(el => el.classList.remove('selected'));
 
     addChatMessage('系统', '底牌已确定，等待叫主...');
   };
