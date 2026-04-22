@@ -595,6 +595,10 @@ function showExchangePanel(bottomCards) {
   }
   gameState.exchangePanelShown = true;
 
+  // 保存当前选中的牌ID
+  const selectedCardIds = gameState.selectedCards.map(c => c.id);
+  console.log('Before adding bottom cards, selected:', selectedCardIds);
+
   // 底牌加入庄家手牌
   gameState.hand = gameState.hand.concat(bottomCards);
   gameState.bottomCards = []; // 清空底牌，等待选择
@@ -627,6 +631,22 @@ function showExchangePanel(bottomCards) {
 
   // 重新渲染手牌（33张）
   renderHand();
+
+  // 恢复选中状态
+  gameState.selectedCards = [];
+  if (selectedCardIds.length > 0) {
+    selectedCardIds.forEach(id => {
+      const card = gameState.hand.find(c => c.id === id);
+      if (card) gameState.selectedCards.push(card);
+    });
+    // 恢复DOM选中状态
+    document.querySelectorAll('.card').forEach(el => {
+      if (selectedCardIds.includes(el.dataset.cardId)) {
+        el.classList.add('selected');
+      }
+    });
+    console.log('Restored selected cards:', gameState.selectedCards.length);
+  }
 
   // 显示提示
   addChatMessage('系统', '底牌已加入你的手牌，请选择8张作为新底牌');
