@@ -61,37 +61,38 @@ function getCardScore(card) {
   return 0;
 }
 
-// 判断是否为当前主牌（包括常主和主牌花色）
-function isTrumpCard(card, trumpSuit, isNoTrump) {
-  if (card.suit === 'joker') return true; // 大小王是常主
-  if (card.rank === '2' || card.rank === '7') return true; // 2和7是常主
-  if (!isNoTrump && card.suit === trumpSuit) return true; // 主牌花色
-  return false;
-}
+// 获取手牌显示排序值（越大越靠前）
+// 顺序：大王 > 小王 > 主7 > 副7 > 主2 > 副2 > 主A > 主K > ... > 主3 > 其他花色
+function getCardDisplayValue(card, trumpSuit, isNoTrump) {
+  // 大王
+  if (card.rank === 'big') return 1000;
+  // 小王
+  if (card.rank === 'small') return 999;
+  // 主7
+  if (card.rank === '7' && !isNoTrump && card.suit === trumpSuit) return 998;
+  // 副7
+  if (card.rank === '7') return 997;
+  // 主2
+  if (card.rank === '2' && !isNoTrump && card.suit === trumpSuit) return 996;
+  // 副2
+  if (card.rank === '2') return 995;
 
-// 手牌显示排序：主牌优先 -> 同花色 -> 牌大小
-function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
-  const aIsTrump = isTrumpCard(a, trumpSuit, isNoTrump);
-  const bIsTrump = isTrumpCard(b, trumpSuit, isNoTrump);
-
-  // 1. 主牌放前面
-  if (aIsTrump && !bIsTrump) return -1;
-  if (!aIsTrump && bIsTrump) return 1;
-
-  // 2. 同花色放一起
-  if (a.suit !== b.suit) {
-    // 主牌花色放最前面（在常主之后）
-    if (!isNoTrump) {
-      if (a.suit === trumpSuit && b.suit !== trumpSuit) return -1;
-      if (a.suit !== trumpSuit && b.suit === trumpSuit) return 1;
-    }
-    return a.suit.localeCompare(b.suit);
+  // 主牌花色（非2、非7）
+  if (!isNoTrump && card.suit === trumpSuit) {
+    const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+    return 500 + (rankValue[card.rank] || 0);
   }
 
-  // 3. 相同花色内按牌大小排序（从大到小）
-  const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-  const aValue = rankOrder[a.rank] || 0;
-  const bValue = rankOrder[b.rank] || 0;
+  // 其他副牌
+  const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+  const suitOrder = { 'spades': 4, 'hearts': 3, 'diamonds': 2, 'clubs': 1 };
+  return suitOrder[card.suit] * 20 + (rankValue[card.rank] || 0);
+}
+
+// 手牌显示排序
+function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
+  const aValue = getCardDisplayValue(a, trumpSuit, isNoTrump);
+  const bValue = getCardDisplayValue(b, trumpSuit, isNoTrump);
   return bValue - aValue;
 }
 
@@ -446,17 +447,29 @@ function startGame(room) {
     room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
     cardIndex += 25;
 
-    // 初始排序：常主优先，同花色，牌大小
+    // 初始排序（无主时）：常主(2、7、王)优先
     room.players[i].hand.sort((a, b) => {
-      // 常主（王、2、7）放前面
-      const aIsTrump = a.isTrump || a.suit === 'joker';
-      const bIsTrump = b.isTrump || b.suit === 'joker';
-      if (aIsTrump && !bIsTrump) return -1;
-      if (!aIsTrump && bIsTrump) return 1;
-      // 同花色
-      if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-      // 牌大小
       const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+      const suitOrder = { 'spades': 4, 'hearts': 3, 'diamonds': 2, 'clubs': 1 };
+
+      // 大王、小王最前
+      if (a.rank === 'big') return -1;
+      if (b.rank === 'big') return 1;
+      if (a.rank === 'small') return -1;
+      if (b.rank === 'small') return 1;
+
+      // 然后是7和2（常主）
+      const aIsConstantTrump = a.rank === '7' || a.rank === '2';
+      const bIsConstantTrump = b.rank === '7' || b.rank === '2';
+      if (aIsConstantTrump && !bIsConstantTrump) return -1;
+      if (!aIsConstantTrump && bIsConstantTrump) return 1;
+      if (aIsConstantTrump && bIsConstantTrump) {
+        if (a.rank !== b.rank) return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+        return suitOrder[b.suit] - suitOrder[a.suit];
+      }
+
+      // 其他牌：按花色，再按大小
+      if (a.suit !== b.suit) return suitOrder[b.suit] - suitOrder[a.suit];
       return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
     });
 
