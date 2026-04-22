@@ -459,10 +459,12 @@ function toggleCardSelection(card, cardEl) {
     cardEl.classList.remove('selected');
   }
 
-  // 显示/隐藏出牌按钮（仅在需要时）
-  if (gameState.selectedCards.length > 0) {
+  // 更新按钮状态（底牌选择阶段始终显示按钮）
+  if (elements.playBtn.textContent === '确定底牌') {
     elements.playBtn.classList.remove('hidden');
-  } else if (elements.playBtn.textContent === '出牌') {
+  } else if (gameState.selectedCards.length > 0) {
+    elements.playBtn.classList.remove('hidden');
+  } else {
     elements.playBtn.classList.add('hidden');
   }
 }
@@ -526,12 +528,16 @@ function updateBidDisplay(data) {
     elements.bidList.appendChild(li);
   });
 
-  // 检查是否轮到自己
-  updateCurrentBidder(data.currentBidder);
+  // 检查是否轮到自己（只有在叫分阶段才显示叫分面板）
+  if (data.state === 'bidding') {
+    updateCurrentBidder(data.currentBidder);
+  } else {
+    // 其他阶段隐藏叫分面板
+    elements.bidPanel.classList.add('hidden');
+  }
 
   // 如果是选择主牌阶段
   if (data.state === 'choosing-trump') {
-    elements.bidPanel.classList.add('hidden');
     if (data.dealer === gameState.seat) {
       elements.trumpPanel.classList.remove('hidden');
     }
