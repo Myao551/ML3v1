@@ -65,7 +65,7 @@ http://localhost:3000
 
 ```text
 Runtime: Node
-Build Command: npm ci
+Build Command: npm install
 Start Command: npm start
 Plan: Free 或更高
 ```
@@ -87,7 +87,7 @@ const PORT = process.env.PORT || 3000;
 5. 设置服务：
    - Name: `sanda1-poker-game`
    - Runtime: `Node`
-   - Build Command: `npm ci`
+   - Build Command: `npm install`
    - Start Command: `npm start`
 6. 创建服务，等待构建完成。
 7. 打开 Render 分配的域名测试游戏。
@@ -114,7 +114,6 @@ Netlify Functions 和 Vercel Serverless Functions 不适合直接承载这个 So
 ```text
 .
 ├── package.json
-├── package-lock.json
 ├── server.js
 ├── render.yaml
 ├── DEPLOY.md
