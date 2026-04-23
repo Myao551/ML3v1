@@ -22,7 +22,9 @@ const gameState = {
   playHistory: [],
   currentRound: [],
   leadSuit: null,
-  joiningRoom: false
+  joiningRoom: false,
+  playHistoryVisible: false,
+  scoringCards: []
 };
 
 // DOM元素
@@ -40,6 +42,7 @@ const elements = {
   closeRulesBtn: document.querySelector('#rules-modal .close-btn'),
   roomIdDisplay: document.getElementById('room-id-display'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
+  toggleHistoryBtn: document.getElementById('toggle-history-btn'),
   gameStatus: document.getElementById('game-status'),
   trumpDisplay: document.getElementById('trump-display'),
   readyBtn: document.getElementById('ready-btn'),
@@ -62,6 +65,11 @@ const elements = {
   scorePanel: document.getElementById('score-panel'),
   teamScore: document.getElementById('team-score'),
   targetScore: document.getElementById('target-score'),
+  scoringCardsPanel: document.getElementById('scoring-cards-panel'),
+  settlementDisplay: document.getElementById('settlement-display'),
+  baseScoreInput: document.getElementById('base-score-input'),
+  levelScoreInput: document.getElementById('level-score-input'),
+  tableBottomDeck: document.getElementById('table-bottom-deck'),
   chatInput: document.getElementById('chat-input'),
   sendBtn: document.getElementById('send-btn'),
   chatMessages: document.getElementById('chat-messages'),
@@ -93,6 +101,19 @@ function setJoinBusy(isBusy) {
   elements.joinRoomBtn.disabled = isBusy;
 }
 
+function getSettlementSettingsFromInputs() {
+  return {
+    baseScore: Number(elements.baseScoreInput.value) || 0,
+    levelScore: Number(elements.levelScoreInput.value) || 0
+  };
+}
+
+function updateSettlementDisplay(settings) {
+  const baseScore = Number(settings?.baseScore) || 0;
+  const levelScore = Number(settings?.levelScore) || 0;
+  elements.settlementDisplay.textContent = `大小：${baseScore}+${levelScore}`;
+}
+
 // 初始化
 function init() {
   // 检查URL参数
@@ -121,6 +142,7 @@ function init() {
   elements.playBtn.addEventListener('click', playCards);
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
+  elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
   elements.sendBtn.addEventListener('click', sendChatMessage);
   elements.earlyFinishBtn.addEventListener('click', voteEndGame);
   elements.chatInput.addEventListener('keypress', (e) => {
@@ -131,6 +153,11 @@ function init() {
     elements.readyBtn.classList.remove('hidden');
     elements.readyBtn.textContent = '准备';
     elements.readyBtn.disabled = false;
+    elements.settlementDisplay.classList.remove('hidden');
+    gameState.scoringCards = [];
+    renderScoringCards([]);
+    clearSeatPlayPiles();
+    elements.tableBottomDeck.classList.add('hidden');
     // 重置底牌面板状态
     gameState.exchangePanelShown = false;
     // 恢复出牌按钮的事件绑定
@@ -210,6 +237,10 @@ function connectSocket() {
     elements.scorePanel.classList.remove('hidden');
     elements.targetScore.textContent = data.currentBid;
     gameState.currentBidder = data.currentBidder;
+    gameState.scoringCards = [];
+    renderScoringCards([]);
+    clearSeatPlayPiles();
+    showTableBottomDeck();
     // 重置准备按钮状态
     elements.readyBtn.classList.add('hidden');
     elements.readyBtn.textContent = '准备';
@@ -228,11 +259,15 @@ function connectSocket() {
     gameState.bottomCards = cards;
     showBottomCards(cards);
   });
+  gameState.socket.on('bottom-to-dealer', (data) => {
+    animateBottomDeckToDealer(data.dealer);
+  });
 
   gameState.socket.on('trump-chosen', (data) => {
     gameState.trumpSuit = data.trumpSuit;
     gameState.isNoTrump = data.isNoTrump;
     updateTrumpDisplay(data.trumpSuit, data.isNoTrump);
+    renderHand();
     addChatMessage('系统', `${gameState.players[data.dealer].name} 选择了 ${data.isNoTrump ? '无主' : getSuitName(data.trumpSuit)}`);
   });
 
@@ -243,6 +278,7 @@ function connectSocket() {
 
   // 等待庄家叫主
   gameState.socket.on('waiting-trump', (data) => {
+    showTableBottomDeck();
     if (data.dealer !== gameState.seat) {
       addChatMessage('系统', '等待庄家选择主牌...');
     }
@@ -259,6 +295,7 @@ function connectSocket() {
     gameState.currentPlayer = data.currentPlayer;
     gameState.isExchanging = false;
     elements.earlyFinishPanel.classList.add('hidden');
+    elements.tableBottomDeck.classList.add('hidden');
     updateCurrentPlayer(data.currentPlayer);
 
     // 恢复出牌按钮的事件绑定
@@ -297,7 +334,9 @@ function connectSocket() {
   gameState.socket.on('round-end', (data) => {
     gameState.currentRound = [];
     gameState.leadSuit = null;
+    renderScoringCards(data.scoringCards || []);
     showRoundResult(data);
+    setTimeout(clearSeatPlayPiles, 3000);
   });
 
   gameState.socket.on('next-turn', (data) => {
@@ -355,7 +394,11 @@ function createRoom() {
   setJoinBusy(true);
   connectSocket();
 
-  gameState.socket.emit('create-room', { name, sessionId: gameState.sessionId }, (response) => {
+  gameState.socket.emit('create-room', {
+    name,
+    sessionId: gameState.sessionId,
+    settlementSettings: getSettlementSettingsFromInputs()
+  }, (response) => {
     if (response.success) {
       gameState.roomId = response.roomId;
       gameState.playerId = response.playerId;
@@ -416,6 +459,13 @@ function enterGame() {
 function updateRoomDisplay(room) {
   gameState.players = room.players;
   gameState.currentState = room.state;
+  if (room.settlementSettings) {
+    elements.baseScoreInput.value = room.settlementSettings.baseScore;
+    elements.levelScoreInput.value = room.settlementSettings.levelScore;
+    updateSettlementDisplay(room.settlementSettings);
+  }
+  elements.settlementDisplay.classList.remove('hidden');
+  renderScoringCards(room.scoringCards || gameState.scoringCards || []);
 
   const me = room.players.find(p => p.id === gameState.playerId);
   if (me) {
@@ -481,6 +531,7 @@ function clearSeatDisplay(seatIndex) {
     seatEl.querySelector('.player-name').textContent = '等待中';
     seatEl.querySelector('.player-avatar').textContent = '?';
     seatEl.querySelector('.player-cards').textContent = '0';
+    seatEl.querySelector('.seat-play-pile').innerHTML = '';
     seatEl.querySelector('.player-status').textContent = '';
     seatEl.classList.remove('dealer');
     seatEl.classList.remove('disconnected');
@@ -541,7 +592,7 @@ function createCardElement(card, index) {
     `;
   }
 
-  if (card.isTrump) {
+  if (card.isTrump || isClientTrumpCard(card)) {
     cardEl.classList.add('trump');
   }
 
@@ -988,6 +1039,7 @@ function showPlayedCards(playerIndex, cards) {
 
   playContainer.appendChild(cardsContainer);
   elements.playedCardsArea.appendChild(playContainer);
+  renderSeatPlayPile(playerIndex, cards);
 
   // 添加到出牌记录
   addPlayHistory(playerName, cards);
@@ -1031,7 +1083,7 @@ function showPlayedCards(playerIndex, cards) {
 
 // 添加出牌记录
 function addPlayHistory(playerName, cards) {
-  elements.playHistory.classList.remove('hidden');
+  elements.playHistory.classList.toggle('hidden', !gameState.playHistoryVisible);
   elements.playHistoryList.querySelectorAll('.latest').forEach(item => item.classList.remove('latest'));
 
   const item = document.createElement('div');
@@ -1051,16 +1103,7 @@ function addPlayHistory(playerName, cards) {
   cardsDiv.className = 'cards';
 
   cards.forEach(card => {
-    const miniCard = document.createElement('div');
-    miniCard.className = `card-mini ${getCardColorClass(card)}`;
-
-    if (card.suit === 'joker') {
-      miniCard.classList.add('joker-mini');
-      miniCard.textContent = card.rank === 'big' ? '\u5927\u738b' : '\u5c0f\u738b';
-    } else {
-      miniCard.textContent = `${card.rank}${getSuitSymbol(card.suit)}`;
-    }
-    cardsDiv.appendChild(miniCard);
+    cardsDiv.appendChild(createMiniCardElement(card));
   });
 
   item.appendChild(cardsDiv);
@@ -1071,9 +1114,27 @@ function addPlayHistory(playerName, cards) {
   }
 }
 
+function createMiniCardElement(card) {
+  const miniCard = document.createElement('div');
+  miniCard.className = `card-mini ${getCardColorClass(card)}`;
+  if (card.isTrump || isClientTrumpCard(card)) {
+    miniCard.classList.add('trump-mini');
+  }
+  if (card.suit === 'joker') {
+    miniCard.classList.add('joker-mini');
+    miniCard.textContent = card.rank === 'big' ? '\u5927\u738b' : '\u5c0f\u738b';
+  } else {
+    miniCard.textContent = `${card.rank}${getSuitSymbol(card.suit)}`;
+  }
+  return miniCard;
+}
+
 function createPlayedCardElement(card) {
   const cardEl = document.createElement('div');
   cardEl.className = `played-card ${card.suit} ${getCardColorClass(card)}`;
+  if (card.isTrump || isClientTrumpCard(card)) {
+    cardEl.classList.add('trump');
+  }
 
   if (card.suit === 'joker') {
     const isBigJoker = card.rank === 'big';
@@ -1116,6 +1177,70 @@ function updatePlayerCardCount(playerIndex, count) {
     const currentCount = parseInt(seatEl.querySelector('.player-cards').textContent);
     seatEl.querySelector('.player-cards').textContent = currentCount - count;
   }
+}
+
+function togglePlayHistory() {
+  gameState.playHistoryVisible = !gameState.playHistoryVisible;
+  elements.playHistory.classList.toggle('hidden', !gameState.playHistoryVisible);
+  elements.toggleHistoryBtn.classList.toggle('active', gameState.playHistoryVisible);
+}
+
+function clearSeatPlayPiles() {
+  document.querySelectorAll('.seat-play-pile').forEach(pile => {
+    pile.innerHTML = '';
+  });
+}
+
+function renderSeatPlayPile(playerIndex, cards) {
+  const seatEl = getSeatElement(playerIndex);
+  if (!seatEl) return;
+  const pile = seatEl.querySelector('.seat-play-pile');
+  pile.innerHTML = '';
+  cards.forEach(card => {
+    const mini = createMiniCardElement(card);
+    pile.appendChild(mini);
+  });
+}
+
+function renderScoringCards(cards) {
+  gameState.scoringCards = cards || [];
+  if (!elements.scoringCardsPanel) return;
+  elements.scoringCardsPanel.innerHTML = '';
+  if (!gameState.scoringCards.length) {
+    elements.scoringCardsPanel.textContent = '得分牌：无';
+    return;
+  }
+  const label = document.createElement('span');
+  label.className = 'scoring-label';
+  label.textContent = '得分牌';
+  elements.scoringCardsPanel.appendChild(label);
+  const list = document.createElement('div');
+  list.className = 'scoring-card-list';
+  gameState.scoringCards.forEach(card => list.appendChild(createMiniCardElement(card)));
+  elements.scoringCardsPanel.appendChild(list);
+}
+
+function showTableBottomDeck() {
+  if (!elements.tableBottomDeck) return;
+  elements.tableBottomDeck.classList.remove('hidden', 'move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left');
+  elements.tableBottomDeck.innerHTML = '';
+  for (let i = 0; i < 8; i++) {
+    const back = document.createElement('div');
+    back.className = 'bottom-card-back';
+    elements.tableBottomDeck.appendChild(back);
+  }
+}
+
+function animateBottomDeckToDealer(dealerIndex) {
+  if (!elements.tableBottomDeck) return;
+  const relativeSeat = (dealerIndex - gameState.seat + 4) % 4;
+  const directionClasses = ['move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left'];
+  elements.tableBottomDeck.classList.remove('move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left');
+  elements.tableBottomDeck.classList.add(directionClasses[relativeSeat] || 'move-to-top');
+  setTimeout(() => {
+    elements.tableBottomDeck.classList.add('hidden');
+    elements.tableBottomDeck.classList.remove('move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left');
+  }, 700);
 }
 
 function showRoundResult(data) {
@@ -1172,10 +1297,14 @@ function showGameResult(data) {
   const isDealerWin = data.result === 'dealer-won';
   const iAmDealer = gameState.players[gameState.seat]?.isDealer;
 
-  if (data.result === 'qingguang') {
+  if (data.settlement?.special === 'qingguang') {
     title = '\u6e05\u5149';
     content = '\u95f2\u5bb6\u672c\u5c40\u6ca1\u6709\u5f97\u5206\u3002';
-    className = isDealerWin === iAmDealer ? 'result-win' : 'result-lose';
+    className = iAmDealer ? 'result-win' : 'result-lose';
+  } else if (data.settlement?.special === 'bianguang') {
+    title = '\u8fb9\u5149';
+    content = '\u95f2\u5bb6\u5f97\u5206\u5c0f\u4e8e 30\uff0c\u5e84\u5bb6\u7ed3\u7b97\u7ffb\u500d\u3002';
+    className = iAmDealer ? 'result-win' : 'result-lose';
   } else if (data.result === 'dealer-lost') {
     title = '\u95f2\u5bb6\u80dc\u5229';
     content = '\u95f2\u5bb6\u5f97\u5206\u8fbe\u5230\u5e84\u5bb6\u76ee\u6807\u3002';
@@ -1187,11 +1316,21 @@ function showGameResult(data) {
   }
 
   elements.resultTitle.textContent = title;
+  const settlementRows = data.settlement?.deltas
+    ? data.settlement.deltas.map((delta, index) => {
+        const name = escapeHtml(gameState.players[index]?.name || `玩家${index + 1}`);
+        const total = data.settlement.totals?.[index] ?? 0;
+        const sign = delta > 0 ? '+' : '';
+        return `<p>${name}: ${sign}${delta}（累计 ${total}）</p>`;
+      }).join('')
+    : '';
+
   elements.resultContent.innerHTML = `
     <div class="result-score ${className}">${data.teamScore} / ${data.targetScore}</div>
     <p>${content}</p>
     <p>\u95f2\u5bb6\u5f97\u5206\uff1a${data.teamScore}</p>
     <p>\u5e84\u5bb6\u76ee\u6807\uff1a${data.targetScore}</p>
+    ${data.settlement ? `<p>本局结算：${data.settlement.unit} 分/闲家</p>${settlementRows}` : ''}
   `;
 }
 

@@ -154,7 +154,9 @@ function createRoom(roomId) {
     currentRound: [],
     roundWinner: null,
     scores: { team: 0 },
+    scoringCards: [],
     dealerScore: 0,
+    settlementSettings: { baseScore: 1, levelScore: 1 },
     roundScores: [],
     bidHistory: [],
     passedBidders: new Set(),
@@ -162,7 +164,8 @@ function createRoom(roomId) {
     earlyFinishVotes: new Set(),
     earlyFinishOffered: false,
     gameNumber: 1,
-    lastWinner: null
+    lastWinner: null,
+    nextBidder: 0
   };
 }
 
@@ -174,6 +177,15 @@ function normalizePlayerPayload(payload) {
   return {
     name: String(payload?.name || '').trim(),
     sessionId: payload?.sessionId || null
+  };
+}
+
+function normalizeSettlementSettings(settings) {
+  const baseScore = Number(settings?.baseScore);
+  const levelScore = Number(settings?.levelScore);
+  return {
+    baseScore: Number.isFinite(baseScore) && baseScore >= 0 ? Math.floor(baseScore) : 1,
+    levelScore: Number.isFinite(levelScore) && levelScore >= 0 ? Math.floor(levelScore) : 1
   };
 }
 
@@ -205,6 +217,7 @@ io.on('connection', (socket) => {
 
     const roomId = uuidv4().slice(0, 8);
     const room = createRoom(roomId);
+    room.settlementSettings = normalizeSettlementSettings(playerPayload?.settlementSettings);
 
     const player = {
       id: socket.id,
@@ -214,6 +227,7 @@ io.on('connection', (socket) => {
       hand: [],
       isReady: false,
       isDealer: false,
+      settlementScore: 0,
       disconnected: false,
       disconnectTimer: null
     };
@@ -276,6 +290,7 @@ io.on('connection', (socket) => {
       hand: [],
       isReady: false,
       isDealer: false,
+      settlementScore: 0,
       disconnected: false,
       disconnectTimer: null
     };
@@ -570,9 +585,12 @@ function getRoomState(room) {
       seat: p.seat,
       isReady: p.isReady,
       isDealer: p.isDealer,
+      settlementScore: p.settlementScore || 0,
       disconnected: !!p.disconnected,
       cardCount: p.hand.length
     })),
+    settlementSettings: room.settlementSettings,
+    scoringCards: room.scoringCards,
     currentBid: room.currentBid,
     currentBidder: room.currentBidder,
     dealer: room.dealer,
@@ -680,6 +698,7 @@ function setDealer(room, dealerIndex, dealerScore) {
   dealer.hand = dealer.hand.concat(room.bottomCards);
   dealer.hand.sort((a, b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
 
+  io.to(room.id).emit('bottom-to-dealer', { dealer: dealerIndex });
   io.to(dealer.id).emit('hand-sorted', dealer.hand);
   io.to(dealer.id).emit('exchange-cards', {
     bottomCards: room.bottomCards,
@@ -698,6 +717,7 @@ function startGame(room) {
   room.currentRound = [];
   room.roundScores = [];
   room.scores.team = 0;
+  room.scoringCards = [];
   room.dealerScore = 0;
   room.bidHistory = [];
   room.passedBidders = new Set();
@@ -745,9 +765,7 @@ function startGame(room) {
   }
 
   // 确定第一个叫分者
-  if (room.lastWinner !== null) {
-    room.currentBidder = room.lastWinner;
-  }
+  room.currentBidder = (room.nextBidder || 0) % room.players.length;
 
   io.to(room.id).emit('game-started', {
     currentBidder: room.currentBidder,
@@ -911,6 +929,47 @@ function getBottomMultiplier(analysis) {
   return 1;
 }
 
+function calculateSettlement(room, result, finalScore) {
+  const baseScore = Number(room.settlementSettings?.baseScore) || 0;
+  const levelScore = Number(room.settlementSettings?.levelScore) || 0;
+  const bidSteps = Math.max(0, (100 - room.dealerScore) / 5);
+  const baseUnit = baseScore + bidSteps * levelScore;
+  let multiplier = 1;
+  let special = null;
+
+  if (result !== 'dealer-lost' && finalScore === 0) {
+    multiplier = 3;
+    special = 'qingguang';
+  } else if (result !== 'dealer-lost' && finalScore < 30) {
+    multiplier = 2;
+    special = 'bianguang';
+  }
+
+  const unit = baseUnit * multiplier;
+  const deltas = room.players.map((player, index) => {
+    if (index === room.dealer) {
+      return result === 'dealer-lost' ? -unit * 3 : unit * 3;
+    }
+    return result === 'dealer-lost' ? unit : -unit;
+  });
+
+  room.players.forEach((player, index) => {
+    player.settlementScore = (player.settlementScore || 0) + deltas[index];
+  });
+
+  return {
+    baseScore,
+    levelScore,
+    bidSteps,
+    baseUnit,
+    multiplier,
+    unit,
+    special,
+    deltas,
+    totals: room.players.map(player => player.settlementScore || 0)
+  };
+}
+
 function validatePlay(room, cards, playerIndex) {
   const player = room.players[playerIndex];
 
@@ -990,6 +1049,8 @@ function finishRound(room) {
   // 闲家得分
   if (!winnerIsDealer) {
     room.scores.team += roundScore;
+    const scoreCards = room.currentRound.flatMap(play => play.cards).filter(card => getCardScore(card) > 0);
+    room.scoringCards.push(...scoreCards);
   }
 
   room.roundScores.push({
@@ -1007,6 +1068,10 @@ function finishRound(room) {
     let multiplier = getBottomMultiplier(winnerAnalysis);
     const bottomScore = room.bottomCards.reduce((sum, c) => sum + getCardScore(c), 0) * multiplier;
     room.scores.team += bottomScore;
+    const bottomScoreCards = room.bottomCards.filter(card => getCardScore(card) > 0);
+    for (let i = 0; i < multiplier; i++) {
+      room.scoringCards.push(...bottomScoreCards);
+    }
 
     io.to(room.id).emit('koudi', {
       player: winnerPlayer,
@@ -1031,6 +1096,7 @@ function finishRound(room) {
     winner: winnerPlayer,
     score: roundScore,
     totalScore: room.scores.team,
+    scoringCards: room.scoringCards,
     plays: room.currentRound,
     isLastRound: isLastRound
   });
@@ -1054,17 +1120,19 @@ function endGame(room, reason = 'normal') {
   let result;
   if (finalScore >= targetScore) {
     result = 'dealer-lost';
-  } else if (finalScore === 0) {
-    result = 'qingguang';
   } else {
     result = 'dealer-won';
   }
+
+  const settlement = calculateSettlement(room, result, finalScore);
+  room.nextBidder = room.dealer === null ? 0 : (room.dealer + 1) % room.players.length;
 
   io.to(room.id).emit('game-end', {
     result,
     teamScore: finalScore,
     targetScore,
     dealer: room.dealer,
+    settlement,
     reason
   });
 
@@ -1081,10 +1149,14 @@ function resetRoomForNextGame(room) {
     p.hand = [];
   });
   room.scores.team = 0;
+  room.scoringCards = [];
   room.bidHistory = [];
   room.currentBid = 100;
   room.dealerScore = 0;
   room.dealer = null;
+  room.trumpSuit = null;
+  room.isNoTrump = false;
+  room.currentBidder = room.players.length ? (room.nextBidder || 0) % room.players.length : 0;
   room.currentRound = [];
   room.roundScores = [];
   room.passedBidders = new Set();

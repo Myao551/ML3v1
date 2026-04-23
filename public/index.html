@@ -23,6 +23,11 @@
           <input type="text" id="player-name" placeholder="输入昵称" maxlength="12" autocomplete="nickname">
         </div>
 
+        <div id="home-settlement-settings" class="home-settlement-settings">
+          <label>底分 <input type="number" id="base-score-input" min="0" step="1" value="1"></label>
+          <label>级分 <input type="number" id="level-score-input" min="0" step="1" value="1"></label>
+        </div>
+
         <div class="button-group">
           <button id="create-room-btn" class="btn btn-primary">创建房间</button>
           <button id="join-room-btn" class="btn btn-secondary">加入房间</button>
@@ -77,6 +82,7 @@
           <div class="room-info">
             <span id="room-id-display">房间：----</span>
             <button id="copy-link-btn" class="btn btn-small">复制邀请</button>
+            <button id="toggle-history-btn" class="btn btn-small btn-secondary">出牌记录</button>
           </div>
           <div class="game-info">
             <span id="game-status">等待玩家...</span>
@@ -84,11 +90,14 @@
           </div>
         </div>
 
+        <div id="settlement-display" class="settlement-display hidden">大小：1+1</div>
+
         <div class="table">
           <div class="player-seat top" data-seat="opposite">
             <div class="player-avatar">?</div>
             <div class="player-name">等待中</div>
             <div class="player-cards">25</div>
+            <div class="seat-play-pile"></div>
             <div class="player-status"></div>
           </div>
 
@@ -96,6 +105,7 @@
             <div class="player-avatar">?</div>
             <div class="player-name">等待中</div>
             <div class="player-cards">25</div>
+            <div class="seat-play-pile"></div>
             <div class="player-status"></div>
           </div>
 
@@ -103,6 +113,7 @@
             <div class="player-avatar">?</div>
             <div class="player-name">等待中</div>
             <div class="player-cards">25</div>
+            <div class="seat-play-pile"></div>
             <div class="player-status"></div>
           </div>
 
@@ -137,6 +148,7 @@
               <button id="confirm-exchange-btn" class="btn btn-primary">确定</button>
             </div>
 
+            <div id="table-bottom-deck" class="table-bottom-deck hidden"></div>
             <div id="played-cards" class="played-cards-area"></div>
             <div id="play-history" class="play-history hidden">
               <h4>出牌记录</h4>
@@ -148,6 +160,7 @@
             <div class="player-avatar">我</div>
             <div class="player-name" id="my-name">我</div>
             <div class="player-cards" id="my-card-count">0</div>
+            <div class="seat-play-pile"></div>
             <div class="player-status" id="my-status"></div>
           </div>
         </div>
@@ -178,6 +191,7 @@
           <div class="score-content">
             <p>闲家得分：<span id="team-score">0</span></p>
             <p>庄家目标：<span id="target-score">100</span></p>
+            <div id="scoring-cards-panel" class="scoring-cards-panel"></div>
           </div>
           <div id="early-finish-panel" class="early-finish-panel hidden">
             <p id="early-finish-text">闲家已达标，可投票结束本局。</p>

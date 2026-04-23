@@ -247,6 +247,7 @@ body {
 }
 
 .player-seat {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -264,6 +265,42 @@ body {
 
 .player-seat.dealer {
   border: 2px solid #f39c12;
+}
+
+.seat-play-pile {
+  position: absolute;
+  display: flex;
+  gap: 3px;
+  min-height: 28px;
+  pointer-events: none;
+}
+
+.player-seat.bottom .seat-play-pile {
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+}
+
+.player-seat.top .seat-play-pile {
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+}
+
+.player-seat.left .seat-play-pile {
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 8px;
+}
+
+.player-seat.right .seat-play-pile {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 8px;
 }
 
 .player-avatar {
@@ -339,6 +376,56 @@ body {
   flex-wrap: wrap;
   justify-content: center;
   max-width: 400px;
+}
+
+.table-bottom-deck {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  transform: translate(-50%, -50%);
+  transition: transform 0.65s ease, opacity 0.65s ease;
+  z-index: 2;
+}
+
+.table-bottom-deck.hidden {
+  display: none;
+}
+
+.table-bottom-deck.move-to-top {
+  transform: translate(-50%, -150%) scale(0.65);
+  opacity: 0;
+}
+
+.table-bottom-deck.move-to-right {
+  transform: translate(130%, -50%) scale(0.65);
+  opacity: 0;
+}
+
+.table-bottom-deck.move-to-bottom {
+  transform: translate(-50%, 95%) scale(0.65);
+  opacity: 0;
+}
+
+.table-bottom-deck.move-to-left {
+  transform: translate(-230%, -50%) scale(0.65);
+  opacity: 0;
+}
+
+.bottom-card-back {
+  width: 36px;
+  height: 52px;
+  margin-left: -20px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.25) 0 4px, transparent 4px 8px),
+    linear-gradient(135deg, #1d4ed8, #7c2d12);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.bottom-card-back:first-child {
+  margin-left: 0;
 }
 
 /* 叫分面板 */
@@ -473,7 +560,8 @@ body {
   font-size: 14px;
 }
 
-.card.trump {
+.card.trump,
+.played-card.trump {
   border: 2px solid #f39c12;
 }
 
@@ -563,6 +651,69 @@ body {
 
 .score-content p {
   margin: 5px 0;
+}
+
+.scoring-cards-panel {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.scoring-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #fde68a;
+  font-weight: 800;
+}
+
+.scoring-card-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 240px;
+}
+
+.home-settlement-settings,
+.settlement-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.settlement-display {
+  width: fit-content;
+  margin: 8px auto 0;
+  color: #fde68a;
+  font-weight: 900;
+}
+
+.settlement-display.hidden {
+  display: none;
+}
+
+.home-settlement-settings label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #e5e7eb;
+}
+
+.home-settlement-settings input {
+  width: 64px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: #0f172a;
+  color: #f8fafc;
 }
 
 .early-finish-panel {
@@ -769,6 +920,16 @@ body {
 
 .play-history-item .card-mini.black {
   color: #2c3e50;
+}
+
+.card-mini.trump-mini {
+  border-color: #facc15;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.6);
+}
+
+.btn.active {
+  border-color: #facc15;
+  color: #fde68a;
 }
 
 /* 当前出牌区域 */
@@ -1159,7 +1320,8 @@ body {
   font-size: 11px;
 }
 
-.card.trump {
+.card.trump,
+.played-card.trump {
   border: 2px solid #facc15;
   box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18), 0 8px 18px rgba(0, 0, 0, 0.28);
 }
