@@ -565,6 +565,19 @@ body {
   margin: 5px 0;
 }
 
+.early-finish-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.early-finish-panel p {
+  margin-bottom: 8px;
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* 聊天框 - 移到右上角避免遮挡 */
 .chat-box {
   position: fixed;
@@ -975,6 +988,21 @@ body {
   grid-template-columns: 1fr auto;
 }
 
+.join-panel input,
+#room-id {
+  color: #f8fafc;
+  background: #0f172a;
+  border-color: rgba(250, 204, 21, 0.55);
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+#room-id::placeholder {
+  color: #94a3b8;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
 .btn {
   border-radius: 8px;
 }
@@ -1161,5 +1189,90 @@ body {
   .card {
     width: 48px;
     height: 68px;
+  }
+}
+
+/* Keep the player's hand on one visual row. */
+.hand-area {
+  overflow: hidden;
+}
+
+.hand-cards {
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  min-height: 118px;
+  padding: 18px 18px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(250, 204, 21, 0.65) rgba(15, 23, 42, 0.45);
+}
+
+.hand-cards::-webkit-scrollbar {
+  height: 8px;
+}
+
+.hand-cards::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.45);
+  border-radius: 999px;
+}
+
+.hand-cards::-webkit-scrollbar-thumb {
+  background: rgba(250, 204, 21, 0.65);
+  border-radius: 999px;
+}
+
+.hand-cards .card {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 82px;
+  margin-left: -24px;
+}
+
+.hand-cards .card:first-child {
+  margin-left: 0;
+}
+
+.hand-cards .card:hover,
+.hand-cards .card.selected {
+  z-index: 5;
+}
+
+.hand-cards .card.selected {
+  z-index: 6;
+}
+
+/* Keep chat below the top bar instead of clipping under it. */
+.chat-box {
+  top: 86px;
+  right: 16px;
+  width: 260px;
+  z-index: 70;
+}
+
+.chat-messages {
+  height: 170px;
+}
+
+@media (max-width: 768px) {
+  .hand-cards {
+    justify-content: flex-start;
+    min-height: 96px;
+    padding-left: 28px;
+    padding-right: 18px;
+  }
+
+  .hand-cards .card {
+    flex-basis: 46px;
+    width: 46px;
+    height: 64px;
+    margin-left: -18px;
+  }
+
+  .chat-box {
+    top: 78px;
+    right: 8px;
+    width: min(240px, calc(100vw - 16px));
   }
 }

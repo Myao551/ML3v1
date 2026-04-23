@@ -159,6 +159,8 @@ function createRoom(roomId) {
     bidHistory: [],
     passedBidders: new Set(),
     hasValidBid: false,
+    earlyFinishVotes: new Set(),
+    earlyFinishOffered: false,
     gameNumber: 1,
     lastWinner: null
   };
@@ -270,7 +272,7 @@ io.on('connection', (socket) => {
       const activeBidders = getActiveBidders(room);
 
       if (activeBidders.length === 0) {
-        startGame(room);
+        handleAllPass(room);
         return;
       }
 
@@ -299,6 +301,25 @@ io.on('connection', (socket) => {
     }
 
     emitBidUpdate(room);
+  });
+
+  socket.on('vote-end-game', () => {
+    const room = rooms.get(socket.roomId);
+    if (!room || room.state !== 'playing' || room.scores.team < room.dealerScore) return;
+
+    const voterIndex = room.players.findIndex(p => p.id === socket.id);
+    if (voterIndex === -1) return;
+
+    room.earlyFinishVotes.add(voterIndex);
+    io.to(room.id).emit('early-finish-vote-update', {
+      votes: room.earlyFinishVotes.size,
+      total: room.players.length,
+      voters: [...room.earlyFinishVotes]
+    });
+
+    if (room.earlyFinishVotes.size === room.players.length) {
+      endGame(room, 'early');
+    }
   });
 
   // 选择主牌
@@ -505,6 +526,57 @@ function isValidBid(room, bid) {
   return room.hasValidBid ? bid < room.currentBid : bid === 100;
 }
 
+function getConstantTrumpCards(cards) {
+  return cards.filter(card => card.suit === 'joker' || card.rank === '2' || card.rank === '7');
+}
+
+function getConstantTrumpCompareValue(card) {
+  const suitOrder = { diamonds: 0, clubs: 1, hearts: 2, spades: 3 };
+  if (card.rank === 'big') return 1000;
+  if (card.rank === 'small') return 999;
+  if (card.rank === '7') return 700 + (suitOrder[card.suit] || 0);
+  if (card.rank === '2') return 200 + (suitOrder[card.suit] || 0);
+  return 0;
+}
+
+function compareAllPassLoser(a, b) {
+  if (a.count !== b.count) return b.count - a.count;
+
+  const maxLength = Math.max(a.values.length, b.values.length);
+  for (let i = 0; i < maxLength; i++) {
+    const aValue = a.values[i] || 0;
+    const bValue = b.values[i] || 0;
+    if (aValue !== bValue) return bValue - aValue;
+  }
+
+  return a.index - b.index;
+}
+
+function handleAllPass(room) {
+  const standings = room.players.map((player, index) => {
+    const trumps = getConstantTrumpCards(player.hand);
+    return {
+      index,
+      player,
+      count: trumps.length,
+      values: trumps.map(getConstantTrumpCompareValue).sort((a, b) => b - a)
+    };
+  }).sort(compareAllPassLoser);
+
+  const loser = standings[0];
+  room.state = 'ended';
+
+  io.to(room.id).emit('all-pass-loser', {
+    loser: loser.index,
+    loserName: loser.player.name,
+    trumpCount: loser.count,
+    trumpValues: loser.values
+  });
+
+  resetRoomForNextGame(room);
+  io.to(room.id).emit('room-update', getRoomState(room));
+}
+
 function setDealer(room, dealerIndex, dealerScore) {
   room.players.forEach(p => { p.isDealer = false; });
 
@@ -538,6 +610,8 @@ function startGame(room) {
   room.bidHistory = [];
   room.passedBidders = new Set();
   room.hasValidBid = false;
+  room.earlyFinishVotes = new Set();
+  room.earlyFinishOffered = false;
 
   // 发牌：每人25张，8张底牌 (共108张)
   room.bottomCards = room.deck.slice(0, 8);
@@ -850,6 +924,17 @@ function finishRound(room) {
     });
   }
 
+  if (!isLastRound && room.scores.team >= room.dealerScore && !room.earlyFinishOffered) {
+    room.earlyFinishOffered = true;
+    room.earlyFinishVotes = new Set();
+    io.to(room.id).emit('early-finish-available', {
+      teamScore: room.scores.team,
+      targetScore: room.dealerScore,
+      votes: 0,
+      total: room.players.length
+    });
+  }
+
   io.to(room.id).emit('round-end', {
     winner: winnerPlayer,
     score: roundScore,
@@ -869,7 +954,7 @@ function finishRound(room) {
 }
 
 // 结束游戏
-function endGame(room) {
+function endGame(room, reason = 'normal') {
   room.state = 'ended';
   const finalScore = room.scores.team;
   const targetScore = room.dealerScore;
@@ -884,13 +969,19 @@ function endGame(room) {
   }
 
   io.to(room.id).emit('game-end', {
-    result: result,
+    result,
     teamScore: finalScore,
-    targetScore: targetScore,
-    dealer: room.dealer
+    targetScore,
+    dealer: room.dealer,
+    reason
   });
 
-  // 准备下一局
+  resetRoomForNextGame(room);
+  io.to(room.id).emit('room-update', getRoomState(room));
+}
+
+function resetRoomForNextGame(room) {
+  room.state = 'waiting';
   room.gameNumber++;
   room.players.forEach(p => {
     p.isDealer = false;
@@ -900,8 +991,14 @@ function endGame(room) {
   room.scores.team = 0;
   room.bidHistory = [];
   room.currentBid = 100;
+  room.dealerScore = 0;
+  room.dealer = null;
+  room.currentRound = [];
+  room.roundScores = [];
   room.passedBidders = new Set();
   room.hasValidBid = false;
+  room.earlyFinishVotes = new Set();
+  room.earlyFinishOffered = false;
 }
 
 const PORT = process.env.PORT || 3000;

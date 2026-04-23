@@ -2,10 +2,8 @@ services:
   - type: web
     name: sanda1-poker-game
     env: node
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: npm ci
+    startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 18
-      - key: PORT
-        value: 10000

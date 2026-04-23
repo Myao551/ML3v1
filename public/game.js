@@ -68,7 +68,10 @@ const elements = {
   resultContent: document.getElementById('result-content'),
   nextGameBtn: document.getElementById('next-game-btn'),
   playHistory: document.getElementById('play-history'),
-  playHistoryList: document.getElementById('play-history-list')
+  playHistoryList: document.getElementById('play-history-list'),
+  earlyFinishPanel: document.getElementById('early-finish-panel'),
+  earlyFinishText: document.getElementById('early-finish-text'),
+  earlyFinishBtn: document.getElementById('early-finish-btn')
 };
 
 // 初始化
@@ -100,6 +103,7 @@ function init() {
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
   elements.sendBtn.addEventListener('click', sendChatMessage);
+  elements.earlyFinishBtn.addEventListener('click', voteEndGame);
   elements.chatInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendChatMessage();
   });
@@ -219,6 +223,7 @@ function connectSocket() {
     elements.gameStatus.textContent = '游戏中';
     gameState.currentPlayer = data.currentPlayer;
     gameState.isExchanging = false;
+    elements.earlyFinishPanel.classList.add('hidden');
     updateCurrentPlayer(data.currentPlayer);
 
     // 恢复出牌按钮的事件绑定
@@ -271,6 +276,18 @@ function connectSocket() {
 
   gameState.socket.on('game-end', (data) => {
     showGameResult(data);
+  });
+
+  gameState.socket.on('early-finish-available', (data) => {
+    showEarlyFinishPanel(data);
+  });
+
+  gameState.socket.on('early-finish-vote-update', (data) => {
+    updateEarlyFinishVotes(data);
+  });
+
+  gameState.socket.on('all-pass-loser', (data) => {
+    showAllPassLoser(data);
   });
 
   gameState.socket.on('chat-message', (data) => {
@@ -477,23 +494,63 @@ function createCardElement(card, index) {
   return cardEl;
 }
 
+function getAutoSelectCards(card) {
+  if (gameState.isExchanging) return [card];
+
+  const effectiveSuit = getClientEffectiveSuit(card);
+  const suitedCards = gameState.hand.filter(handCard => getClientEffectiveSuit(handCard) === effectiveSuit);
+  const groups = new Map();
+  suitedCards.forEach(handCard => {
+    const key = `${handCard.suit}-${handCard.rank}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(handCard);
+  });
+
+  const pairGroups = [...groups.entries()]
+    .filter(([, groupCards]) => groupCards.length >= 2)
+    .map(([key, groupCards]) => ({
+      key,
+      rankIndex: getClientRankIndex(groupCards[0]),
+      cards: groupCards.slice(0, 2)
+    }))
+    .sort((a, b) => a.rankIndex - b.rankIndex);
+
+  const clickedKey = `${card.suit}-${card.rank}`;
+  const clickedPair = pairGroups.find(group => group.key === clickedKey);
+  if (!clickedPair) return [card];
+
+  const clickedIndex = pairGroups.indexOf(clickedPair);
+  let start = clickedIndex;
+  let end = clickedIndex;
+
+  while (start > 0 && pairGroups[start].rankIndex === pairGroups[start - 1].rankIndex + 1) {
+    start--;
+  }
+  while (end < pairGroups.length - 1 && pairGroups[end + 1].rankIndex === pairGroups[end].rankIndex + 1) {
+    end++;
+  }
+
+  const chain = pairGroups.slice(start, end + 1);
+  return (chain.length >= 2 ? chain : [clickedPair]).flatMap(group => group.cards);
+}
+
 function toggleCardSelection(card, cardEl) {
   const cardId = card.id || cardEl.dataset.cardId;
-  console.log('Toggle selection:', cardId, 'Current selected:', gameState.selectedCards.length);
-
   const index = gameState.selectedCards.findIndex(c => c.id === cardId);
 
   if (index === -1) {
-    gameState.selectedCards.push(card);
-    cardEl.classList.add('selected');
-    console.log('Added card, now selected:', gameState.selectedCards.length);
+    getAutoSelectCards(card).forEach(autoCard => {
+      if (!gameState.selectedCards.some(selected => selected.id === autoCard.id)) {
+        gameState.selectedCards.push(autoCard);
+      }
+      const autoCardEl = elements.myHand.querySelector(`[data-card-id="${autoCard.id}"]`);
+      if (autoCardEl) autoCardEl.classList.add('selected');
+    });
   } else {
     gameState.selectedCards.splice(index, 1);
     cardEl.classList.remove('selected');
-    console.log('Removed card, now selected:', gameState.selectedCards.length);
   }
 
-  // 底牌选择阶段始终显示按钮
   if (gameState.isExchanging || elements.playBtn.dataset.action === 'exchange') {
     elements.playBtn.classList.remove('hidden');
   } else if (gameState.selectedCards.length > 0) {
@@ -503,7 +560,6 @@ function toggleCardSelection(card, cardEl) {
   }
 }
 
-// 出牌
 function playCards() {
   if (gameState.selectedCards.length === 0) return;
 
@@ -1021,8 +1077,47 @@ function showRoundResult(data) {
   }
 }
 
+function showEarlyFinishPanel(data) {
+  elements.earlyFinishPanel.classList.remove('hidden');
+  elements.earlyFinishBtn.disabled = false;
+  elements.earlyFinishBtn.textContent = '\u540c\u610f\u7ed3\u675f';
+  elements.earlyFinishText.textContent = `\u95f2\u5bb6\u5df2\u8fbe\u5230 ${data.targetScore} \u5206\uff0c\u53ef\u56db\u4eba\u540c\u610f\u540e\u76f4\u63a5\u7ed3\u675f\u672c\u5c40\u3002\u5df2\u540c\u610f\uff1a${data.votes}/${data.total}`;
+}
+
+function updateEarlyFinishVotes(data) {
+  elements.earlyFinishPanel.classList.remove('hidden');
+  elements.earlyFinishText.textContent = `\u5df2\u540c\u610f\u7ed3\u675f\uff1a${data.votes}/${data.total}`;
+  if (data.voters.includes(gameState.seat)) {
+    elements.earlyFinishBtn.disabled = true;
+    elements.earlyFinishBtn.textContent = '\u5df2\u540c\u610f';
+  }
+}
+
+function voteEndGame() {
+  gameState.socket.emit('vote-end-game');
+  elements.earlyFinishBtn.disabled = true;
+  elements.earlyFinishBtn.textContent = '\u5df2\u540c\u610f';
+}
+
+function showAllPassLoser(data) {
+  elements.resultModal.classList.remove('hidden');
+  elements.resultTitle.textContent = '\u56db\u4eba\u90fd\u4e0d\u53eb';
+  elements.resultContent.innerHTML = `
+    <div class="result-score result-lose">${escapeHtml(data.loserName)}</div>
+    <p>\u5e38\u4e3b\u6700\u591a\u6216\u6700\u5927\uff0c\u5224\u5b9a\u4e3a\u672c\u5c40\u8f93\u5bb6\u3002</p>
+    <p>\u5e38\u4e3b\u6570\uff1a${data.trumpCount}</p>
+    <p>\u8bf7\u51c6\u5907\u5f00\u59cb\u4e0b\u4e00\u5c40\u3002</p>
+  `;
+  elements.readyBtn.classList.remove('hidden');
+  elements.readyBtn.textContent = '\u51c6\u5907';
+  elements.readyBtn.disabled = false;
+  elements.bidPanel.classList.add('hidden');
+  elements.earlyFinishPanel.classList.add('hidden');
+}
+
 function showGameResult(data) {
   elements.resultModal.classList.remove('hidden');
+  elements.earlyFinishPanel.classList.add('hidden');
   let title, content, className;
   const isDealerWin = data.result === 'dealer-won';
   const iAmDealer = gameState.players[gameState.seat]?.isDealer;
