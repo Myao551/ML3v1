@@ -1251,14 +1251,14 @@ body {
 /* Put chat at the table's lower-right, above the hand area. */
 .chat-box {
   top: auto;
-  bottom: 156px;
+  bottom: 210px;
   right: 24px;
   width: 280px;
   z-index: 70;
 }
 
 .chat-messages {
-  height: 150px;
+  height: 130px;
 }
 
 @media (max-width: 768px) {
@@ -1278,12 +1278,12 @@ body {
 
   .chat-box {
     top: auto;
-    bottom: 112px;
+    bottom: 154px;
     right: 8px;
     width: min(240px, calc(100vw - 16px));
   }
 
   .chat-messages {
-    height: 128px;
+    height: 110px;
   }
 }
