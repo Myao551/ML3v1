@@ -424,12 +424,11 @@ function updateRoomDisplay(room) {
   }
 
   room.players.forEach(player => {
-    const relativeSeat = (player.seat - gameState.seat + 4) % 4;
-    updateSeatDisplay(relativeSeat, player);
+    updateSeatDisplay(player.seat, player);
   });
 
   for (let i = 0; i < 4; i++) {
-    if (!room.players.find(p => (p.seat - gameState.seat + 4) % 4 === i)) {
+    if (!room.players.find(p => p.seat === i)) {
       clearSeatDisplay(i);
     }
   }
@@ -444,9 +443,14 @@ function updateRoomDisplay(room) {
   elements.gameStatus.textContent = statusText[room.state] || '游戏中';
 }
 
-function updateSeatDisplay(relativeSeat, player) {
-  const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
-  const seatEl = document.querySelector(seatElements[relativeSeat]);
+function getSeatElement(seatIndex) {
+  const relativeSeat = (seatIndex - gameState.seat + 4) % 4;
+  const seatSelectors = ['.player-seat.bottom', '.player-seat.right', '.player-seat.top', '.player-seat.left'];
+  return document.querySelector(seatSelectors[relativeSeat]);
+}
+
+function updateSeatDisplay(seatIndex, player) {
+  const seatEl = getSeatElement(seatIndex);
 
   if (seatEl) {
     seatEl.querySelector('.player-name').textContent = player.name;
@@ -470,9 +474,8 @@ function updateSeatDisplay(relativeSeat, player) {
   }
 }
 
-function clearSeatDisplay(relativeSeat) {
-  const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
-  const seatEl = document.querySelector(seatElements[relativeSeat]);
+function clearSeatDisplay(seatIndex) {
+  const seatEl = getSeatElement(seatIndex);
 
   if (seatEl) {
     seatEl.querySelector('.player-name').textContent = '等待中';
@@ -815,9 +818,7 @@ function updateCurrentBidder(bidderIndex) {
 
   // 高亮显示当前叫分者
   document.querySelectorAll('.player-seat').forEach(seat => seat.classList.remove('active'));
-  const relativeSeat = (bidderIndex - gameState.seat + 4) % 4;
-  const seatSelectors = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
-  const seatEl = document.querySelector(seatSelectors[relativeSeat]);
+  const seatEl = getSeatElement(bidderIndex);
   if (seatEl) seatEl.classList.add('active');
 }
 
@@ -1097,9 +1098,7 @@ function updateCurrentPlayer(playerIndex) {
     seat.classList.remove('active');
   });
 
-  const relativeSeat = (playerIndex - gameState.seat + 4) % 4;
-  const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
-  const seatEl = document.querySelector(seatElements[relativeSeat]);
+  const seatEl = getSeatElement(playerIndex);
 
   if (seatEl) {
     seatEl.classList.add('active');
@@ -1111,9 +1110,7 @@ function updateCurrentPlayer(playerIndex) {
 }
 
 function updatePlayerCardCount(playerIndex, count) {
-  const relativeSeat = (playerIndex - gameState.seat + 4) % 4;
-  const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
-  const seatEl = document.querySelector(seatElements[relativeSeat]);
+  const seatEl = getSeatElement(playerIndex);
 
   if (seatEl) {
     const currentCount = parseInt(seatEl.querySelector('.player-cards').textContent);
