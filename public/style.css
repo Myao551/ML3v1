@@ -1248,11 +1248,11 @@ body {
   z-index: 6;
 }
 
-/* Keep chat in the lower-right now that the hand fits in one row. */
+/* Put chat at the table's lower-right, above the hand area. */
 .chat-box {
   top: auto;
-  bottom: 18px;
-  right: 16px;
+  bottom: 156px;
+  right: 24px;
   width: 280px;
   z-index: 70;
 }
@@ -1278,7 +1278,7 @@ body {
 
   .chat-box {
     top: auto;
-    bottom: 12px;
+    bottom: 112px;
     right: 8px;
     width: min(240px, calc(100vw - 16px));
   }
