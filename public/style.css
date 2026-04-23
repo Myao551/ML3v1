@@ -267,6 +267,23 @@ body {
   border: 2px solid #f39c12;
 }
 
+.dealer-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #facc15;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 800;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.28);
+}
+
 .seat-play-pile {
   position: absolute;
   display: flex;
@@ -381,11 +398,12 @@ body {
 .table-bottom-deck {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + 86px);
   display: flex;
   transform: translate(-50%, -50%);
   transition: transform 0.65s ease, opacity 0.65s ease;
-  z-index: 2;
+  z-index: 0;
+  pointer-events: none;
 }
 
 .table-bottom-deck.hidden {
@@ -393,7 +411,7 @@ body {
 }
 
 .table-bottom-deck.move-to-top {
-  transform: translate(-50%, -150%) scale(0.65);
+  transform: translate(-50%, -260%) scale(0.65);
   opacity: 0;
 }
 
@@ -403,7 +421,7 @@ body {
 }
 
 .table-bottom-deck.move-to-bottom {
-  transform: translate(-50%, 95%) scale(0.65);
+  transform: translate(-50%, 35%) scale(0.65);
   opacity: 0;
 }
 
@@ -751,6 +769,10 @@ body {
 .chat-messages .message {
   margin-bottom: 5px;
   word-break: break-all;
+}
+
+.chat-messages.hide-system .system-message {
+  display: none;
 }
 
 .chat-messages .player-name {

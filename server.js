@@ -633,7 +633,7 @@ function getNextBidder(room) {
 
 function isValidBid(room, bid) {
   if (!Number.isInteger(bid) || bid > 100 || bid < 75 || bid % 5 !== 0) return false;
-  return room.hasValidBid ? bid < room.currentBid : bid === 100;
+  return room.hasValidBid ? bid < room.currentBid : true;
 }
 
 function getConstantTrumpCards(cards) {
@@ -1007,17 +1007,21 @@ function validatePlay(room, cards, playerIndex) {
     const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
     const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
     const structureAnalysis = analyzePlay(structureCards, room.trumpSuit, room.isNoTrump);
+    const obligationSuitInHand = countEffectiveSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
 
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
-      if (handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)) {
+      if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
+          handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)) {
         return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength;
       }
-      if (handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
+      if (obligationSuitInHand >= 2 &&
+          handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
         return structureAnalysis.valid && structureAnalysis.pairCount > 0;
       }
     }
 
     if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
+        obligationSuitInHand >= 2 &&
         handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
       return structureAnalysis.valid && structureAnalysis.pairCount > 0;
     }

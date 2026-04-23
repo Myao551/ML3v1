@@ -24,6 +24,7 @@ const gameState = {
   leadSuit: null,
   joiningRoom: false,
   playHistoryVisible: false,
+  systemMessagesVisible: true,
   scoringCards: []
 };
 
@@ -43,6 +44,7 @@ const elements = {
   roomIdDisplay: document.getElementById('room-id-display'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   toggleHistoryBtn: document.getElementById('toggle-history-btn'),
+  toggleSystemBtn: document.getElementById('toggle-system-btn'),
   gameStatus: document.getElementById('game-status'),
   trumpDisplay: document.getElementById('trump-display'),
   readyBtn: document.getElementById('ready-btn'),
@@ -111,7 +113,7 @@ function getSettlementSettingsFromInputs() {
 function updateSettlementDisplay(settings) {
   const baseScore = Number(settings?.baseScore) || 0;
   const levelScore = Number(settings?.levelScore) || 0;
-  elements.settlementDisplay.textContent = `大小：${baseScore}+${levelScore}`;
+  elements.settlementDisplay.textContent = `\u5927\u5c0f\uff1a${baseScore}+${levelScore}`;
 }
 
 // 初始化
@@ -143,6 +145,8 @@ function init() {
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
   elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
+  elements.toggleSystemBtn.addEventListener('click', toggleSystemMessages);
+  elements.toggleSystemBtn.classList.add('active');
   elements.sendBtn.addEventListener('click', sendChatMessage);
   elements.earlyFinishBtn.addEventListener('click', voteEndGame);
   elements.chatInput.addEventListener('keypress', (e) => {
@@ -336,7 +340,6 @@ function connectSocket() {
     gameState.leadSuit = null;
     renderScoringCards(data.scoringCards || []);
     showRoundResult(data);
-    setTimeout(clearSeatPlayPiles, 3000);
   });
 
   gameState.socket.on('next-turn', (data) => {
@@ -520,6 +523,8 @@ function updateSeatDisplay(seatIndex, player) {
       seatEl.classList.remove('dealer');
     }
 
+    seatEl.classList.toggle('dealer', !!player.isDealer);
+    updateDealerBadge(seatEl, !!player.isDealer);
     seatEl.dataset.playerId = player.id;
   }
 }
@@ -534,8 +539,21 @@ function clearSeatDisplay(seatIndex) {
     seatEl.querySelector('.seat-play-pile').innerHTML = '';
     seatEl.querySelector('.player-status').textContent = '';
     seatEl.classList.remove('dealer');
+    updateDealerBadge(seatEl, false);
     seatEl.classList.remove('disconnected');
     delete seatEl.dataset.playerId;
+  }
+}
+
+function updateDealerBadge(seatEl, isDealer) {
+  let badge = seatEl.querySelector('.dealer-badge');
+  if (isDealer && !badge) {
+    badge = document.createElement('div');
+    badge.className = 'dealer-badge';
+    badge.textContent = '\u5e84';
+    seatEl.appendChild(badge);
+  } else if (!isDealer && badge) {
+    badge.remove();
   }
 }
 
@@ -823,18 +841,22 @@ function validatePlay(cards) {
     const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
     const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
     const structureAnalysis = analyzeClientPlay(structureCards);
+    const obligationSuitInHand = clientCountEffectiveSuit(gameState.hand, obligationSuit);
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
-      if (clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)) {
+      if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
+          clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)) {
         return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
           ? { valid: true }
           : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
       }
-      if (clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
+      if (obligationSuitInHand >= 2 &&
+          clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
         return { valid: false, message: '你没有拖拉机但有对子时必须跟对子。' };
       }
     }
 
     if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
+        obligationSuitInHand >= 2 &&
         clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
       return { valid: false, message: '你有对子时必须跟对子。' };
     }
@@ -1185,6 +1207,13 @@ function togglePlayHistory() {
   elements.toggleHistoryBtn.classList.toggle('active', gameState.playHistoryVisible);
 }
 
+function toggleSystemMessages() {
+  gameState.systemMessagesVisible = !gameState.systemMessagesVisible;
+  elements.toggleSystemBtn.classList.toggle('active', gameState.systemMessagesVisible);
+  elements.toggleSystemBtn.textContent = gameState.systemMessagesVisible ? '\u7cfb\u7edf\u63d0\u793a' : '\u63d0\u793a\u5173\u95ed';
+  elements.chatMessages.classList.toggle('hide-system', !gameState.systemMessagesVisible);
+}
+
 function clearSeatPlayPiles() {
   document.querySelectorAll('.seat-play-pile').forEach(pile => {
     pile.innerHTML = '';
@@ -1353,11 +1382,16 @@ function sendChatMessage() {
 }
 
 function addChatMessage(player, message) {
+  const isSystem = isSystemMessage(player);
   const msgEl = document.createElement('div');
-  msgEl.className = 'message';
+  msgEl.className = isSystem ? 'message system-message' : 'message';
   msgEl.innerHTML = `<span class="player-name">${player}:</span> ${escapeHtml(message)}`;
   elements.chatMessages.appendChild(msgEl);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+function isSystemMessage(player) {
+  return player === '\u7cfb\u7edf' || player === 'ç³»ç»Ÿ' || player === 'ç»¯è¤ç²º';
 }
 
 function escapeHtml(text) {
