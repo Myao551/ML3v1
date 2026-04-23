@@ -646,6 +646,147 @@ body {
   overflow-y: auto;
 }
 
+/* 主牌指示器 */
+.trump-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: linear-gradient(45deg, #f39c12, #e74c3c);
+  border-radius: 20px;
+  font-size: 18px;
+  font-weight: bold;
+  color: white;
+  box-shadow: 0 4px 15px rgba(243, 156, 18, 0.4);
+  animation: pulse 2s infinite;
+}
+
+.trump-indicator.hidden {
+  display: none;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+/* 出牌记录 */
+.play-history {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  width: min(420px, calc(100% - 20px));
+  max-height: 230px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  z-index: 90;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.play-history.hidden {
+  display: none;
+}
+
+.play-history h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #f8fafc;
+  letter-spacing: 0;
+}
+
+.play-history-item {
+  display: grid;
+  grid-template-columns: 72px 38px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+}
+
+.play-history-item.latest {
+  background: rgba(59, 130, 246, 0.14);
+  margin: 0 -6px;
+  padding: 7px 6px;
+  border-radius: 6px;
+}
+
+.play-history-item .player-name {
+  color: #bfdbfe;
+  font-weight: bold;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.play-history-item .card-count {
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 24px;
+}
+
+.play-history-item .cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.play-history-item .card-mini {
+  width: 24px;
+  height: 32px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.play-history-item .card-mini.red {
+  color: #e74c3c;
+}
+
+.play-history-item .card-mini.black {
+  color: #2c3e50;
+}
+
+/* 当前出牌区域 */
+.current-round {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.round-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.round-player .player-label {
+  font-size: 12px;
+  color: #95a5a6;
+}
+
+.round-player .played-cards {
+  display: flex;
+  gap: 5px;
+}
+
 /* 游戏结果 */
 #result-content {
   text-align: center;
@@ -728,4 +869,297 @@ body {
 /* 隐藏 */
 .hidden {
   display: none !important;
+}
+
+/* UI polish */
+body {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(244, 185, 66, 0.16), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(59, 130, 246, 0.16), transparent 26%),
+    linear-gradient(135deg, #0f172a 0%, #12372f 48%, #07111f 100%);
+}
+
+.home-container {
+  max-width: 460px;
+  padding: 34px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+}
+
+.brand-mark {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.brand-card {
+  width: 44px;
+  height: 58px;
+  border-radius: 6px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 22px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.26);
+  transform: rotate(-6deg);
+}
+
+.brand-card.black {
+  color: #111827;
+  transform: translateY(-5px) rotate(4deg);
+}
+
+.brand-card.red {
+  color: #dc2626;
+}
+
+.brand-card.joker {
+  color: #7c2d12;
+  background: linear-gradient(160deg, #fff7ed, #fed7aa);
+  transform: rotate(8deg);
+}
+
+.home-container h1 {
+  font-size: 3.4rem;
+  letter-spacing: 0;
+  background: linear-gradient(135deg, #f8fafc, #facc15);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.subtitle {
+  color: #cbd5e1;
+}
+
+.input-group {
+  text-align: left;
+}
+
+.input-group label,
+.join-panel label {
+  display: block;
+  margin-bottom: 8px;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.input-group input,
+.join-panel input,
+.chat-input-group input {
+  background: rgba(2, 6, 23, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 8px;
+}
+
+.input-group input:focus,
+.join-panel input:focus,
+.chat-input-group input:focus {
+  border-color: #facc15;
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.16);
+}
+
+.button-group,
+.join-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.join-row {
+  grid-template-columns: 1fr auto;
+}
+
+.btn {
+  border-radius: 8px;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #f59e0b, #dc2626);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 10px 24px rgba(245, 158, 11, 0.32);
+}
+
+.btn-secondary {
+  background: rgba(15, 23, 42, 0.64);
+  border-color: rgba(148, 163, 184, 0.38);
+}
+
+.top-bar,
+.hand-area,
+.player-seat,
+.panel,
+.bid-history,
+.score-panel,
+.chat-box {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 23, 42, 0.74);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+}
+
+.table {
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(34, 197, 94, 0.16), transparent 42%),
+    linear-gradient(135deg, rgba(20, 83, 45, 0.56), rgba(6, 78, 59, 0.22));
+  border: 1px solid rgba(134, 239, 172, 0.16);
+}
+
+.player-seat.active {
+  background: rgba(250, 204, 21, 0.16);
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5), 0 16px 34px rgba(0, 0, 0, 0.25);
+}
+
+.player-seat.dealer {
+  border-color: #facc15;
+}
+
+.player-avatar {
+  background: linear-gradient(135deg, #f8fafc, #94a3b8);
+  color: #0f172a;
+}
+
+.card,
+.played-card {
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.96));
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+
+.card {
+  width: 64px;
+  height: 90px;
+}
+
+.card.red .rank,
+.card.red .suit,
+.card.red .corner,
+.played-card.red .rank,
+.played-card.red .suit {
+  color: #dc2626;
+}
+
+.card.black .rank,
+.card.black .suit,
+.card.black .corner,
+.played-card.black .rank,
+.played-card.black .suit {
+  color: #111827;
+}
+
+.card .corner {
+  position: absolute;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.card .corner.top {
+  top: 6px;
+  left: 7px;
+}
+
+.card .corner.bottom {
+  right: 7px;
+  bottom: 6px;
+  transform: rotate(180deg);
+}
+
+.card .rank {
+  font-size: 22px;
+}
+
+.card .suit {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.card.joker,
+.played-card.joker {
+  color: #fff;
+  overflow: hidden;
+  border-color: rgba(250, 204, 21, 0.5);
+}
+
+.card.big-joker,
+.played-card.big-joker {
+  background: linear-gradient(150deg, #7f1d1d, #dc2626 48%, #f59e0b);
+}
+
+.card.small-joker,
+.played-card.small-joker {
+  background: linear-gradient(150deg, #111827, #334155 48%, #64748b);
+}
+
+.joker-crown {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.joker-letter {
+  writing-mode: vertical-rl;
+  letter-spacing: 1px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.joker-name {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.played-card.joker .joker-crown {
+  font-size: 16px;
+}
+
+.played-card.joker .joker-name {
+  font-size: 11px;
+}
+
+.card.trump {
+  border: 2px solid #facc15;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18), 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.card-mini.red {
+  color: #dc2626;
+}
+
+.card-mini.black {
+  color: #111827;
+}
+
+.card-mini.joker-mini {
+  width: 34px;
+  background: linear-gradient(135deg, #111827, #f59e0b);
+  color: #fff;
+}
+
+@media (max-width: 768px) {
+  .home-container {
+    padding: 24px;
+  }
+
+  .home-container h1 {
+    font-size: 2.7rem;
+  }
+
+  .button-group {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    width: 48px;
+    height: 68px;
+  }
 }

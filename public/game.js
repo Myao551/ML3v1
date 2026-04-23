@@ -16,7 +16,11 @@ const gameState = {
   trumpSuit: null,
   isNoTrump: false,
   bottomCards: [],
-  exchangePanelShown: false
+  exchangePanelShown: false,
+  isExchanging: false,
+  playHistory: [],
+  currentRound: [],
+  leadSuit: null
 };
 
 // DOM元素
@@ -62,7 +66,9 @@ const elements = {
   resultModal: document.getElementById('result-modal'),
   resultTitle: document.getElementById('result-title'),
   resultContent: document.getElementById('result-content'),
-  nextGameBtn: document.getElementById('next-game-btn')
+  nextGameBtn: document.getElementById('next-game-btn'),
+  playHistory: document.getElementById('play-history'),
+  playHistoryList: document.getElementById('play-history-list')
 };
 
 // 初始化
@@ -192,8 +198,8 @@ function connectSocket() {
   });
 
   // 底牌交换：底牌加入手牌，选择8张作为新底牌
-  gameState.socket.on('exchange-cards', (cards) => {
-    showExchangePanel(cards);
+  gameState.socket.on('exchange-cards', (payload) => {
+    showExchangePanel(payload);
   });
 
   // 等待庄家叫主
@@ -212,28 +218,51 @@ function connectSocket() {
   gameState.socket.on('game-start', (data) => {
     elements.gameStatus.textContent = '游戏中';
     gameState.currentPlayer = data.currentPlayer;
+    gameState.isExchanging = false;
     updateCurrentPlayer(data.currentPlayer);
 
     // 恢复出牌按钮的事件绑定
     const newPlayBtn = elements.playBtn.cloneNode(true);
     elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
     elements.playBtn = newPlayBtn;
+    elements.playBtn.dataset.action = 'play';
+    elements.playBtn.textContent = '出牌';
+    elements.playBtn.classList.add('hidden');
     elements.playBtn.addEventListener('click', playCards);
   });
 
   gameState.socket.on('cards-played', (data) => {
     showPlayedCards(data.player, data.cards);
+    if (data.player === gameState.seat) {
+      const playedIds = new Set(data.cards.map(card => card.id));
+      gameState.hand = gameState.hand.filter(card => !playedIds.has(card.id));
+      renderHand();
+    }
     updatePlayerCardCount(data.player, data.cards.length);
-    gameState.currentPlayer = data.nextPlayer;
-    updateCurrentPlayer(data.nextPlayer);
+    if (gameState.currentRound.length < 4) {
+      gameState.currentPlayer = data.nextPlayer;
+      updateCurrentPlayer(data.nextPlayer);
+    }
   });
 
   gameState.socket.on('invalid-play', (message) => {
     alert(message);
   });
 
+  gameState.socket.on('invalid-bid', (message) => {
+    alert(message);
+    updateCurrentBidder(gameState.currentBidder);
+  });
+
   gameState.socket.on('round-end', (data) => {
+    gameState.currentRound = [];
+    gameState.leadSuit = null;
     showRoundResult(data);
+  });
+
+  gameState.socket.on('next-turn', (data) => {
+    gameState.currentPlayer = data.currentPlayer;
+    updateCurrentPlayer(data.currentPlayer);
   });
 
   gameState.socket.on('koudi', (data) => {
@@ -280,7 +309,6 @@ function createRoom() {
   });
 }
 
-// 加入房间
 function joinRoom() {
   const name = elements.playerNameInput.value.trim();
   const roomId = elements.roomIdInput.value.trim();
@@ -308,65 +336,48 @@ function joinRoom() {
   });
 }
 
-// 进入游戏界面
 function enterGame() {
   elements.homeScreen.classList.remove('active');
   elements.gameScreen.classList.add('active');
-  elements.roomIdDisplay.textContent = `房间: ${gameState.roomId}`;
+  elements.roomIdDisplay.textContent = `房间：${gameState.roomId}`;
   elements.myName.textContent = gameState.playerName;
 
-  // 更新URL
   const url = new URL(window.location);
   url.searchParams.set('room', gameState.roomId);
   window.history.pushState({}, '', url);
 }
 
-// 更新房间显示
 function updateRoomDisplay(room) {
   gameState.players = room.players;
   gameState.currentState = room.state;
 
-  // 找到自己的座位
   const me = room.players.find(p => p.id === gameState.playerId);
   if (me) {
     gameState.seat = me.seat;
     gameState.isDealer = me.isDealer;
   }
 
-  // 更新各座位显示
   room.players.forEach(player => {
     const relativeSeat = (player.seat - gameState.seat + 4) % 4;
     updateSeatDisplay(relativeSeat, player);
   });
 
-  // 清空空座位
   for (let i = 0; i < 4; i++) {
     if (!room.players.find(p => (p.seat - gameState.seat + 4) % 4 === i)) {
       clearSeatDisplay(i);
     }
   }
 
-  // 更新游戏状态
-  switch (room.state) {
-    case 'waiting':
-      elements.gameStatus.textContent = `等待玩家 (${room.players.length}/4)`;
-      break;
-    case 'bidding':
-      elements.gameStatus.textContent = '叫分阶段';
-      break;
-    case 'choosing-trump':
-      elements.gameStatus.textContent = '选择主牌';
-      break;
-    case 'exchanging':
-      elements.gameStatus.textContent = '换牌中';
-      break;
-    case 'playing':
-      elements.gameStatus.textContent = '游戏中';
-      break;
-  }
+  const statusText = {
+    waiting: `等待玩家 (${room.players.length}/4)`,
+    bidding: '叫分阶段',
+    'choosing-trump': '选择主牌',
+    exchanging: '换底中',
+    playing: '游戏中'
+  };
+  elements.gameStatus.textContent = statusText[room.state] || '游戏中';
 }
 
-// 更新座位显示
 function updateSeatDisplay(relativeSeat, player) {
   const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
   const seatEl = document.querySelector(seatElements[relativeSeat]);
@@ -374,28 +385,28 @@ function updateSeatDisplay(relativeSeat, player) {
   if (seatEl) {
     seatEl.querySelector('.player-name').textContent = player.name;
     seatEl.querySelector('.player-avatar').textContent = player.name[0].toUpperCase();
-    seatEl.querySelector('.player-cards').textContent = player.cardCount || 21;
+    seatEl.querySelector('.player-cards').textContent = player.cardCount || 25;
 
     if (player.isReady) {
-      seatEl.querySelector('.player-status').textContent = '✓ 已准备';
+      seatEl.querySelector('.player-status').textContent = '已准备';
     } else if (player.isDealer) {
       seatEl.querySelector('.player-status').textContent = '庄家';
       seatEl.classList.add('dealer');
     } else {
       seatEl.querySelector('.player-status').textContent = '';
+      seatEl.classList.remove('dealer');
     }
 
     seatEl.dataset.playerId = player.id;
   }
 }
 
-// 清空座位显示
 function clearSeatDisplay(relativeSeat) {
   const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
   const seatEl = document.querySelector(seatElements[relativeSeat]);
 
   if (seatEl) {
-    seatEl.querySelector('.player-name').textContent = '等待中...';
+    seatEl.querySelector('.player-name').textContent = '等待中';
     seatEl.querySelector('.player-avatar').textContent = '?';
     seatEl.querySelector('.player-cards').textContent = '0';
     seatEl.querySelector('.player-status').textContent = '';
@@ -404,7 +415,6 @@ function clearSeatDisplay(relativeSeat) {
   }
 }
 
-// 准备/取消准备
 function toggleReady() {
   const isReady = elements.readyBtn.textContent === '准备';
   gameState.socket.emit('player-ready', isReady);
@@ -415,7 +425,6 @@ function toggleReady() {
   }, 1000);
 }
 
-// 渲染手牌
 function renderHand() {
   elements.myHand.innerHTML = '';
   elements.myCardCount.textContent = gameState.hand.length;
@@ -427,28 +436,35 @@ function renderHand() {
 }
 
 // 创建牌元素
+function getSuitSymbol(suit) {
+  return { hearts: '\u2665', diamonds: '\u2666', clubs: '\u2663', spades: '\u2660' }[suit] || '';
+}
+
+function getCardColorClass(card) {
+  return card.suit === 'hearts' || card.suit === 'diamonds' || card.rank === 'big' ? 'red' : 'black';
+}
+
 function createCardElement(card, index) {
   const cardEl = document.createElement('div');
-  cardEl.className = `card ${card.suit}`;
+  cardEl.className = `card ${card.suit} ${getCardColorClass(card)}`;
   cardEl.dataset.cardId = card.id;
   cardEl.dataset.index = index;
 
   if (card.suit === 'joker') {
-    cardEl.classList.add('joker');
+    const isBigJoker = card.rank === 'big';
+    cardEl.classList.add('joker', isBigJoker ? 'big-joker' : 'small-joker');
     cardEl.innerHTML = `
-      <span class="rank">${card.name}</span>
+      <span class="joker-crown">${isBigJoker ? '\u2605' : '\u25c6'}</span>
+      <span class="joker-letter">JOKER</span>
+      <span class="joker-name">${isBigJoker ? '\u5927\u738b' : '\u5c0f\u738b'}</span>
     `;
   } else {
-    const suitSymbols = {
-      'hearts': '♥',
-      'diamonds': '♦',
-      'clubs': '♣',
-      'spades': '♠'
-    };
-
+    const suitSymbol = getSuitSymbol(card.suit);
     cardEl.innerHTML = `
+      <span class="corner top">${card.rank}${suitSymbol}</span>
       <span class="rank">${card.rank}</span>
-      <span class="suit">${suitSymbols[card.suit]}</span>
+      <span class="suit">${suitSymbol}</span>
+      <span class="corner bottom">${card.rank}${suitSymbol}</span>
     `;
   }
 
@@ -461,7 +477,6 @@ function createCardElement(card, index) {
   return cardEl;
 }
 
-// 切换牌选择
 function toggleCardSelection(card, cardEl) {
   const cardId = card.id || cardEl.dataset.cardId;
   console.log('Toggle selection:', cardId, 'Current selected:', gameState.selectedCards.length);
@@ -479,7 +494,7 @@ function toggleCardSelection(card, cardEl) {
   }
 
   // 底牌选择阶段始终显示按钮
-  if (elements.playBtn.textContent === '确定底牌') {
+  if (gameState.isExchanging || elements.playBtn.dataset.action === 'exchange') {
     elements.playBtn.classList.remove('hidden');
   } else if (gameState.selectedCards.length > 0) {
     elements.playBtn.classList.remove('hidden');
@@ -492,6 +507,13 @@ function toggleCardSelection(card, cardEl) {
 function playCards() {
   if (gameState.selectedCards.length === 0) return;
 
+  // 验证出牌规则
+  const validation = validatePlay(gameState.selectedCards);
+  if (!validation.valid) {
+    alert(validation.message);
+    return;
+  }
+
   gameState.socket.emit('play-cards', gameState.selectedCards);
   gameState.selectedCards = [];
   elements.playBtn.classList.add('hidden');
@@ -500,6 +522,162 @@ function playCards() {
   document.querySelectorAll('.card.selected').forEach(el => {
     el.classList.remove('selected');
   });
+}
+
+// 验证出牌规则
+function getClientCardValue(card) {
+  const suitOrder = { spades: 3, hearts: 2, diamonds: 1, clubs: 0 };
+  const rankValue = { A: 14, K: 13, Q: 12, J: 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
+
+  if (card.rank === 'big') return 1000;
+  if (card.rank === 'small') return 999;
+  if (card.rank === '7' && card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 998;
+  if (card.rank === '7') return 200 + (suitOrder[card.suit] || 0);
+  if (card.rank === '2' && card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 197;
+  if (card.rank === '2') return 100 + (suitOrder[card.suit] || 0);
+  if (card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 50 + (rankValue[card.rank] || 0);
+  return rankValue[card.rank] || 0;
+}
+
+function isClientTrumpCard(card) {
+  if (card.suit === 'joker') return true;
+  if (card.rank === '2' || card.rank === '7') return true;
+  if (!gameState.isNoTrump && card.suit === gameState.trumpSuit) return true;
+  return false;
+}
+
+function getClientEffectiveSuit(card) {
+  return isClientTrumpCard(card) ? 'trump' : card.suit;
+}
+
+function getClientRankIndex(card) {
+  const suitOrder = { diamonds: 0, clubs: 1, hearts: 2, spades: 3 };
+  const normalOrder = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+  if (card.rank === 'big') return 100;
+  if (card.rank === 'small') return 99;
+  if (getClientEffectiveSuit(card) === 'trump') {
+    if (card.rank === '7') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 98 : 94 + (suitOrder[card.suit] || 0);
+    if (card.rank === '2') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 93 : 89 + (suitOrder[card.suit] || 0);
+  }
+
+  return normalOrder.indexOf(card.rank);
+}
+
+function getClientPairGroups(cards) {
+  const groups = new Map();
+  cards.forEach(card => {
+    const key = `${card.suit}-${card.rank}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(card);
+  });
+
+  return [...groups.values()]
+    .filter(group => group.length >= 2)
+    .map(group => ({
+      rankIndex: getClientRankIndex(group[0]),
+      value: getClientCardValue(group[0])
+    }))
+    .sort((a, b) => a.rankIndex - b.rankIndex);
+}
+
+function getClientLongestTractor(pairGroups) {
+  let best = [];
+  let current = [];
+  pairGroups.forEach(group => {
+    const previous = current[current.length - 1];
+    if (!previous || group.rankIndex === previous.rankIndex + 1) {
+      current.push(group);
+    } else {
+      current = [group];
+    }
+    if (current.length > best.length) best = current.slice();
+  });
+  return best.length >= 2 ? best : [];
+}
+
+function analyzeClientPlay(cards) {
+  if (!Array.isArray(cards) || cards.length === 0) return { valid: false };
+  const suit = getClientEffectiveSuit(cards[0]);
+  if (!cards.every(card => getClientEffectiveSuit(card) === suit)) return { valid: false };
+
+  const pairGroups = getClientPairGroups(cards);
+  const tractorGroups = getClientLongestTractor(pairGroups);
+  let type = 'throw';
+  if (cards.length === 1) type = 'single';
+  else if (cards.length === 2 && pairGroups.length === 1) type = 'pair';
+  else if (cards.length >= 4 && cards.length % 2 === 0 && pairGroups.length * 2 === cards.length && tractorGroups.length === pairGroups.length) type = 'tractor';
+
+  return {
+    valid: true,
+    type,
+    suit,
+    length: cards.length,
+    pairCount: pairGroups.length,
+    tractorLength: tractorGroups.length
+  };
+}
+
+function clientCountEffectiveSuit(cards, suit) {
+  return cards.filter(card => getClientEffectiveSuit(card) === suit).length;
+}
+
+function clientHasPair(cards, suit) {
+  return getClientPairGroups(cards.filter(card => getClientEffectiveSuit(card) === suit)).length > 0;
+}
+
+function clientHasTractor(cards, suit, minLength) {
+  const suitedCards = cards.filter(card => getClientEffectiveSuit(card) === suit);
+  return getClientLongestTractor(getClientPairGroups(suitedCards)).length >= minLength;
+}
+
+function validatePlay(cards) {
+  if (gameState.currentRound.length === 0) {
+    const playAnalysis = analyzeClientPlay(cards);
+    return playAnalysis.valid
+      ? { valid: true }
+      : { valid: false, message: '出牌必须是同一花色；主牌、常主和王算作主牌花色。' };
+  }
+
+  const firstPlay = gameState.currentRound[0];
+  const leadAnalysis = analyzeClientPlay(firstPlay.cards);
+  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) {
+    return { valid: false, message: `本轮必须出 ${firstPlay.cards.length} 张牌。` };
+  }
+
+  const leadSuitInHand = clientCountEffectiveSuit(gameState.hand, leadAnalysis.suit);
+  const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
+  const playedLeadSuitCount = clientCountEffectiveSuit(cards, leadAnalysis.suit);
+  if (playedLeadSuitCount < requiredFollowCount) {
+    return { valid: false, message: '你有首家花色时必须优先跟足。' };
+  }
+
+  const playedLeadSuitCards = cards.filter(card => getClientEffectiveSuit(card) === leadAnalysis.suit);
+  const followedLeadSuit = playedLeadSuitCount > 0;
+  const allPlayedTrump = cards.every(card => getClientEffectiveSuit(card) === 'trump');
+  const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
+  if (followedLeadSuit || isTrumpKill) {
+    const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
+    const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
+    const structureAnalysis = analyzeClientPlay(structureCards);
+    if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
+      if (clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)) {
+        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
+          ? { valid: true }
+          : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
+      }
+      if (clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
+        return { valid: false, message: '你没有拖拉机但有对子时必须跟对子。' };
+      }
+    }
+
+    if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
+        clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
+      return { valid: false, message: '你有对子时必须跟对子。' };
+    }
+  }
+
+  return { valid: true };
 }
 
 // 叫分
@@ -536,7 +714,7 @@ function updateCurrentBidder(bidderIndex) {
 
 function updateBidDisplay(data) {
   elements.targetScore.textContent = data.currentBid;
-  updateBidButtons(data.currentBid);
+  updateBidButtons(data.hasValidBid ? data.currentBid : 105);
   gameState.currentBidder = data.currentBidder;
 
   // 更新叫分记录
@@ -571,20 +749,23 @@ function chooseTrump(suit, isNoTrump) {
 
 // 更新主牌显示
 function updateTrumpDisplay(suit, isNoTrump) {
+  elements.trumpDisplay.classList.remove('hidden');
   if (isNoTrump) {
-    elements.trumpDisplay.textContent = '无主';
+    elements.trumpDisplay.innerHTML = '<span>\ud83c\udccf \u65e0\u4e3b</span>';
+    elements.trumpDisplay.style.background = 'linear-gradient(135deg, #64748b, #334155)';
   } else {
-    const suitNames = {
-      'spades': '♠ 黑桃',
-      'hearts': '♥ 红桃',
-      'clubs': '♣ 梅花',
-      'diamonds': '♦ 方片'
+    const suitInfo = {
+      spades: { symbol: '\u2660', name: '\u9ed1\u6843', color: '#111827' },
+      hearts: { symbol: '\u2665', name: '\u7ea2\u6843', color: '#dc2626' },
+      clubs: { symbol: '\u2663', name: '\u6885\u82b1', color: '#166534' },
+      diamonds: { symbol: '\u2666', name: '\u65b9\u7247', color: '#d97706' }
     };
-    elements.trumpDisplay.textContent = suitNames[suit];
+    const info = suitInfo[suit];
+    elements.trumpDisplay.innerHTML = `<span class="trump-symbol">${info.symbol}</span><span>\u4e3b\u724c\uff1a${info.name}</span>`;
+    elements.trumpDisplay.style.background = `linear-gradient(135deg, ${info.color}, #0f172a)`;
   }
 }
 
-// 显示底牌（仅查看）
 function showBottomCards(cards) {
   elements.bottomCardsDisplay.innerHTML = '';
   cards.forEach(card => {
@@ -593,143 +774,99 @@ function showBottomCards(cards) {
     cardEl.style.height = '63px';
     elements.bottomCardsDisplay.appendChild(cardEl);
   });
-  elements.bottomCardsPanel.querySelector('h3').textContent = '底牌（查看）';
+  elements.bottomCardsPanel.querySelector('h3').textContent = '\u5e95\u724c\uff08\u67e5\u770b\uff09';
   elements.bottomCardsPanel.classList.remove('hidden');
 }
 
-// 显示换牌面板 - 底牌加入手牌，选择8张作为新底牌
-function showExchangePanel(bottomCards) {
-  // 防止重复调用
-  if (gameState.exchangePanelShown) {
-    console.log('Exchange panel already shown, ignoring duplicate call');
-    return;
-  }
-  gameState.exchangePanelShown = true;
+function sortClientHand(cards) {
+  const rankOrder = { big: 100, small: 99, '2': 98, '7': 97, A: 14, K: 13, Q: 12, J: 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+  const suitOrder = { spades: 4, hearts: 3, clubs: 2, diamonds: 1, joker: 5 };
 
-  // 保存当前选中的牌ID
-  const selectedCardIds = gameState.selectedCards.map(c => c.id);
-  console.log('Before adding bottom cards, selected:', selectedCardIds);
-
-  // 底牌加入庄家手牌
-  gameState.hand = gameState.hand.concat(bottomCards);
-  gameState.bottomCards = []; // 清空底牌，等待选择
-
-  // 对手牌进行排序（无主时：常主优先，红黑相间）
-  gameState.hand.sort((a, b) => {
-    const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-    const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 };
-
-    // 大王、小王最前
+  return [...cards].sort((a, b) => {
     if (a.rank === 'big') return -1;
     if (b.rank === 'big') return 1;
     if (a.rank === 'small') return -1;
     if (b.rank === 'small') return 1;
 
-    // 然后是7和2（常主）
     const aIsConstantTrump = a.rank === '7' || a.rank === '2';
     const bIsConstantTrump = b.rank === '7' || b.rank === '2';
     if (aIsConstantTrump && !bIsConstantTrump) return -1;
     if (!aIsConstantTrump && bIsConstantTrump) return 1;
     if (aIsConstantTrump && bIsConstantTrump) {
       if (a.rank !== b.rank) return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
-      return suitOrder[b.suit] - suitOrder[a.suit];
+      return (suitOrder[b.suit] || 0) - (suitOrder[a.suit] || 0);
     }
 
-    // 其他牌：红黑相间，同花色内按大小
-    if (a.suit !== b.suit) return suitOrder[b.suit] - suitOrder[a.suit];
+    if (a.suit !== b.suit) return (suitOrder[b.suit] || 0) - (suitOrder[a.suit] || 0);
     return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
   });
+}
 
-  // 重新渲染手牌（33张）
+function showExchangePanel(payload) {
+  if (gameState.exchangePanelShown) return;
+
+  const bottomCards = Array.isArray(payload) ? payload : (payload.bottomCards || []);
+  const mergedHand = Array.isArray(payload?.hand)
+    ? payload.hand
+    : [...gameState.hand, ...bottomCards.filter(card => !gameState.hand.some(handCard => handCard.id === card.id))];
+
+  gameState.exchangePanelShown = true;
+  gameState.isExchanging = true;
+  gameState.bottomCards = [];
+  gameState.selectedCards = [];
+  gameState.hand = sortClientHand(mergedHand);
   renderHand();
 
-  // 恢复选中状态
-  gameState.selectedCards = [];
-  if (selectedCardIds.length > 0) {
-    selectedCardIds.forEach(id => {
-      const card = gameState.hand.find(c => c.id === id);
-      if (card) gameState.selectedCards.push(card);
-    });
-    // 恢复DOM选中状态
-    document.querySelectorAll('.card').forEach(el => {
-      if (selectedCardIds.includes(el.dataset.cardId)) {
-        el.classList.add('selected');
-      }
-    });
-    console.log('Restored selected cards:', gameState.selectedCards.length);
-  }
+  addChatMessage('\u7cfb\u7edf', '\u5e95\u724c\u5df2\u52a0\u5165\u4f60\u7684\u624b\u724c\uff0c\u8bf7\u9009\u62e9 8 \u5f20\u4f5c\u4e3a\u65b0\u5e95\u724c\u3002');
 
-  // 显示提示
-  addChatMessage('系统', '底牌已加入你的手牌，请选择8张作为新底牌');
-
-  // 重置选择
-  gameState.selectedCards = [];
-
-  // 更改出牌按钮为确定底牌
   elements.playBtn.classList.remove('hidden');
-  elements.playBtn.textContent = '确定底牌';
+  elements.playBtn.dataset.action = 'exchange';
+  elements.playBtn.textContent = '\u786e\u5b9a\u5e95\u724c';
 
-  // 克隆按钮以清除之前的事件监听器
   const newPlayBtn = elements.playBtn.cloneNode(true);
   elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
   elements.playBtn = newPlayBtn;
 
-  // 绑定新的点击事件
   elements.playBtn.addEventListener('click', () => {
-    // 直接从DOM获取选中的牌数量
     const selectedCards = document.querySelectorAll('.card.selected');
-    const selectedCount = selectedCards.length;
-    console.log('Confirm button clicked, selected count from DOM:', selectedCount);
-    console.log('Selected from gameState:', gameState.selectedCards.length);
-
-    if (selectedCount !== 8) {
-      alert(`请选择8张牌作为底牌（已选择${selectedCount}张）`);
+    if (selectedCards.length !== 8) {
+      alert(`\u8bf7\u9009\u62e9 8 \u5f20\u724c\u4f5c\u4e3a\u5e95\u724c\uff0c\u5f53\u524d\u9009\u62e9\u4e86 ${selectedCards.length} \u5f20\u3002`);
       return;
     }
 
-    // 从DOM元素中获取选中的牌数据
-    const selectedCardsData = [];
-    selectedCards.forEach(el => {
-      const cardId = el.dataset.cardId;
-      const card = gameState.hand.find(c => c.id === cardId);
-      if (card) selectedCardsData.push(card);
-    });
+    const selectedCardsData = [...selectedCards]
+      .map(el => gameState.hand.find(card => card.id === el.dataset.cardId))
+      .filter(Boolean);
 
-    // 将选中的牌作为底牌
     gameState.bottomCards = selectedCardsData;
-
-    // 从手牌中移除选中的牌
-    gameState.hand = gameState.hand.filter(c =>
-      !selectedCardsData.some(sc => sc.id === c.id)
-    );
-
-    // 发送到底牌确定
+    gameState.hand = gameState.hand.filter(card => !selectedCardsData.some(selected => selected.id === card.id));
     gameState.socket.emit('finish-exchange', gameState.bottomCards);
 
-    // 重置UI（但保留按钮文字，因为接下来要叫主）
-    elements.playBtn.classList.add('hidden');
+    gameState.isExchanging = false;
     gameState.selectedCards = [];
-    selectedCards.forEach(el => el.classList.remove('selected'));
-
-    addChatMessage('系统', '底牌已确定，等待叫主...');
+    elements.playBtn.dataset.action = 'play';
+    elements.playBtn.textContent = '\u51fa\u724c';
+    elements.playBtn.classList.add('hidden');
+    renderHand();
+    addChatMessage('\u7cfb\u7edf', '\u5e95\u724c\u5df2\u786e\u5b9a\uff0c\u7b49\u5f85\u5e84\u5bb6\u9009\u4e3b\u3002');
   });
 }
 
-// 重置底牌面板状态（用于新一局）
 function resetExchangePanel() {
   gameState.exchangePanelShown = false;
+  gameState.isExchanging = false;
 }
 
-// 完成交换（保留函数兼容性）
 function finishExchange(newBottomCards) {
-  // 此函数现在由showExchangePanel内部处理
 }
 
-// 显示出的牌
 function showPlayedCards(playerIndex, cards) {
+  const playerName = gameState.players[playerIndex]?.name || '玩家';
+
+  // 显示在桌面中央
   const playContainer = document.createElement('div');
   playContainer.className = 'play-container';
-  playContainer.innerHTML = `<span class="player-label">${gameState.players[playerIndex]?.name || '玩家'}</span>`;
+  playContainer.innerHTML = `<span class="player-label">${playerName}</span>`;
 
   const cardsContainer = document.createElement('div');
   cardsContainer.className = 'played-cards-container';
@@ -742,36 +879,110 @@ function showPlayedCards(playerIndex, cards) {
   playContainer.appendChild(cardsContainer);
   elements.playedCardsArea.appendChild(playContainer);
 
-  // 3秒后清除
-  setTimeout(() => {
-    playContainer.remove();
-  }, 3000);
+  // 添加到出牌记录
+  addPlayHistory(playerName, cards);
+
+  // 记录到当前轮次
+  gameState.currentRound.push({
+    player: playerIndex,
+    playerName: playerName,
+    cards: cards,
+    isDealer: gameState.players[playerIndex]?.isDealer
+  });
+
+  // 如果是首家出牌，记录领出花色
+  if (gameState.currentRound.length === 1) {
+    const firstCard = cards[0];
+    // 判断是否是主牌
+    if (firstCard.suit === 'joker' || firstCard.rank === '2' || firstCard.rank === '7' ||
+        (!gameState.isNoTrump && firstCard.suit === gameState.trumpSuit)) {
+      gameState.leadSuit = 'trump'; // 主牌领出
+      console.log('首家出主牌（钓主）');
+    } else {
+      gameState.leadSuit = firstCard.suit;
+      console.log('首家领出花色:', firstCard.suit);
+    }
+  }
+
+  // 4张出完后，清除当前轮次记录
+  if (gameState.currentRound.length === 4) {
+    setTimeout(() => {
+      gameState.currentRound = [];
+      gameState.leadSuit = null;
+      elements.playedCardsArea.innerHTML = '';
+    }, 3000);
+  } else {
+    // 3秒后清除（如果还没出完4张）
+    setTimeout(() => {
+      playContainer.remove();
+    }, 3000);
+  }
 }
 
-// 创建出的牌元素
+// 添加出牌记录
+function addPlayHistory(playerName, cards) {
+  elements.playHistory.classList.remove('hidden');
+  elements.playHistoryList.querySelectorAll('.latest').forEach(item => item.classList.remove('latest'));
+
+  const item = document.createElement('div');
+  item.className = 'play-history-item latest';
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'player-name';
+  nameSpan.textContent = playerName;
+  item.appendChild(nameSpan);
+
+  const countSpan = document.createElement('span');
+  countSpan.className = 'card-count';
+  countSpan.textContent = `${cards.length}\u5f20`;
+  item.appendChild(countSpan);
+
+  const cardsDiv = document.createElement('div');
+  cardsDiv.className = 'cards';
+
+  cards.forEach(card => {
+    const miniCard = document.createElement('div');
+    miniCard.className = `card-mini ${getCardColorClass(card)}`;
+
+    if (card.suit === 'joker') {
+      miniCard.classList.add('joker-mini');
+      miniCard.textContent = card.rank === 'big' ? '\u5927\u738b' : '\u5c0f\u738b';
+    } else {
+      miniCard.textContent = `${card.rank}${getSuitSymbol(card.suit)}`;
+    }
+    cardsDiv.appendChild(miniCard);
+  });
+
+  item.appendChild(cardsDiv);
+  elements.playHistoryList.insertBefore(item, elements.playHistoryList.firstChild);
+
+  while (elements.playHistoryList.children.length > 20) {
+    elements.playHistoryList.removeChild(elements.playHistoryList.lastChild);
+  }
+}
+
 function createPlayedCardElement(card) {
   const cardEl = document.createElement('div');
-  cardEl.className = `played-card ${card.suit}`;
+  cardEl.className = `played-card ${card.suit} ${getCardColorClass(card)}`;
 
   if (card.suit === 'joker') {
-    cardEl.innerHTML = `<span class="rank">${card.name}</span>`;
+    const isBigJoker = card.rank === 'big';
+    cardEl.classList.add('joker', isBigJoker ? 'big-joker' : 'small-joker');
+    cardEl.innerHTML = `
+      <span class="joker-crown">${isBigJoker ? '\u2605' : '\u25c6'}</span>
+      <span class="joker-name">${isBigJoker ? '\u5927\u738b' : '\u5c0f\u738b'}</span>
+    `;
   } else {
-    const suitSymbols = {
-      'hearts': '♥',
-      'diamonds': '♦',
-      'clubs': '♣',
-      'spades': '♠'
-    };
+    const suitSymbol = getSuitSymbol(card.suit);
     cardEl.innerHTML = `
       <span class="rank">${card.rank}</span>
-      <span class="suit">${suitSymbols[card.suit]}</span>
+      <span class="suit">${suitSymbol}</span>
     `;
   }
 
   return cardEl;
 }
 
-// 更新当前玩家
 function updateCurrentPlayer(playerIndex) {
   document.querySelectorAll('.player-seat').forEach(seat => {
     seat.classList.remove('active');
@@ -785,13 +996,11 @@ function updateCurrentPlayer(playerIndex) {
     seatEl.classList.add('active');
   }
 
-  // 检查是否轮到自己
   if (playerIndex === gameState.seat) {
-    addChatMessage('系统', '轮到你了！');
+    addChatMessage('\u7cfb\u7edf', '\u8f6e\u5230\u4f60\u4e86\uff01');
   }
 }
 
-// 更新玩家牌数
 function updatePlayerCardCount(playerIndex, count) {
   const relativeSeat = (playerIndex - gameState.seat + 4) % 4;
   const seatElements = ['.player-seat.bottom', '.player-seat.top', '.player-seat.left', '.player-seat.right'];
@@ -803,37 +1012,32 @@ function updatePlayerCardCount(playerIndex, count) {
   }
 }
 
-// 显示一轮结果
 function showRoundResult(data) {
   elements.teamScore.textContent = data.totalScore;
-
-  const winnerName = gameState.players[data.winner]?.name || '玩家';
-  addChatMessage('系统', `${winnerName} 赢得本轮，得分: ${data.score}`);
-
+  const winnerName = gameState.players[data.winner]?.name || '\u73a9\u5bb6';
+  addChatMessage('\u7cfb\u7edf', `${winnerName} \u8d62\u5f97\u672c\u8f6e\uff0c\u5f97\u5206\uff1a${data.score}`);
   if (data.isLastRound) {
-    addChatMessage('系统', '本局结束！');
+    addChatMessage('\u7cfb\u7edf', '\u672c\u5c40\u7ed3\u675f\uff01');
   }
 }
 
-// 显示游戏结果
 function showGameResult(data) {
   elements.resultModal.classList.remove('hidden');
-
   let title, content, className;
   const isDealerWin = data.result === 'dealer-won';
   const iAmDealer = gameState.players[gameState.seat]?.isDealer;
 
   if (data.result === 'qingguang') {
-    title = '清光！';
-    content = isDealerWin !== iAmDealer ? '闲家被清光！' : '闲家被清光！';
+    title = '\u6e05\u5149';
+    content = '\u95f2\u5bb6\u672c\u5c40\u6ca1\u6709\u5f97\u5206\u3002';
     className = isDealerWin === iAmDealer ? 'result-win' : 'result-lose';
   } else if (data.result === 'dealer-lost') {
-    title = '庄家下庄！';
-    content = '闲家得分超过庄分！';
+    title = '\u95f2\u5bb6\u80dc\u5229';
+    content = '\u95f2\u5bb6\u5f97\u5206\u8fbe\u5230\u5e84\u5bb6\u76ee\u6807\u3002';
     className = !iAmDealer ? 'result-win' : 'result-lose';
   } else {
-    title = '庄家获胜！';
-    content = '闲家未能达到庄分！';
+    title = '\u5e84\u5bb6\u80dc\u5229';
+    content = '\u5e84\u5bb6\u5b88\u4f4f\u4e86\u76ee\u6807\u5206\u3002';
     className = iAmDealer ? 'result-win' : 'result-lose';
   }
 
@@ -841,34 +1045,29 @@ function showGameResult(data) {
   elements.resultContent.innerHTML = `
     <div class="result-score ${className}">${data.teamScore} / ${data.targetScore}</div>
     <p>${content}</p>
-    <p>闲家得分: ${data.teamScore}</p>
-    <p>庄分: ${data.targetScore}</p>
+    <p>\u95f2\u5bb6\u5f97\u5206\uff1a${data.teamScore}</p>
+    <p>\u5e84\u5bb6\u76ee\u6807\uff1a${data.targetScore}</p>
   `;
 }
 
-// 复制邀请链接
 function copyInviteLink() {
   const url = new URL(window.location);
   url.searchParams.set('room', gameState.roomId);
-
   navigator.clipboard.writeText(url.toString()).then(() => {
-    elements.copyLinkBtn.textContent = '已复制!';
+    elements.copyLinkBtn.textContent = '\u5df2\u590d\u5236';
     setTimeout(() => {
-      elements.copyLinkBtn.textContent = '复制邀请链接';
+      elements.copyLinkBtn.textContent = '\u590d\u5236\u9080\u8bf7';
     }, 2000);
   });
 }
 
-// 发送聊天消息
 function sendChatMessage() {
   const message = elements.chatInput.value.trim();
   if (!message) return;
-
   gameState.socket.emit('chat-message', message);
   elements.chatInput.value = '';
 }
 
-// 添加聊天消息
 function addChatMessage(player, message) {
   const msgEl = document.createElement('div');
   msgEl.className = 'message';
@@ -877,23 +1076,20 @@ function addChatMessage(player, message) {
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
-// HTML转义
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-// 获取花色名称
 function getSuitName(suit) {
   const names = {
-    'spades': '黑桃',
-    'hearts': '红桃',
-    'clubs': '梅花',
-    'diamonds': '方片'
+    spades: '\u9ed1\u6843',
+    hearts: '\u7ea2\u6843',
+    clubs: '\u6885\u82b1',
+    diamonds: '\u65b9\u7247'
   };
   return names[suit] || suit;
 }
 
-// 启动游戏
 document.addEventListener('DOMContentLoaded', init);

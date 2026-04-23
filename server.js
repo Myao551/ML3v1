@@ -20,7 +20,7 @@ const rooms = new Map();
 
 // 扑克牌定义
 const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
-const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const RANKS = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const TRUMP_RANKS = ['2', '7'];
 const JOKERS = [{ suit: 'joker', rank: 'big', name: '大王' }, { suit: 'joker', rank: 'small', name: '小王' }];
 
@@ -157,6 +157,8 @@ function createRoom(roomId) {
     dealerScore: 0,
     roundScores: [],
     bidHistory: [],
+    passedBidders: new Set(),
+    hasValidBid: false,
     gameNumber: 1,
     lastWinner: null
   };
@@ -252,50 +254,51 @@ io.on('connection', (socket) => {
     const currentPlayer = room.players[room.currentBidder];
     if (currentPlayer.id !== socket.id) return;
 
+    if (room.passedBidders.has(room.currentBidder)) {
+      room.currentBidder = getNextBidder(room);
+      emitBidUpdate(room);
+      return;
+    }
+
     if (bid === 'pass') {
+      if (room.passedBidders.has(room.currentBidder)) return;
+      room.passedBidders.add(room.currentBidder);
       room.bidHistory.push({ player: currentPlayer.name, bid: 'pass' });
-      room.currentBidder = (room.currentBidder + 1) % 4;
+      room.currentBidder = getNextBidder(room);
 
       // 检查是否只剩一个人没pass
-      const activeBidders = room.players.filter((p, i) =>
-        !room.bidHistory.some(h => h.player === p.name && h.bid === 'pass')
-      );
+      const activeBidders = getActiveBidders(room);
 
-      if (activeBidders.length === 1) {
+      if (activeBidders.length === 0) {
+        startGame(room);
+        return;
+      }
+
+      if (activeBidders.length === 1 && room.hasValidBid) {
         // 确定庄家
-        const winner = room.players[room.currentBidder];
-        winner.isDealer = true;
-        room.dealer = room.currentBidder;
-        room.dealerScore = room.currentBid;
-        room.state = 'exchanging';
+        setDealer(room, activeBidders[0], room.currentBid);
 
         // 底牌加入庄家手牌，让庄家选8张作为新底牌
-        io.to(winner.id).emit('exchange-cards', room.bottomCards);
       }
     } else {
+      if (!isValidBid(room, bid)) {
+        socket.emit('invalid-bid', '无效的叫分');
+        return;
+      }
+
       room.currentBid = bid;
+      room.hasValidBid = true;
       room.bidHistory.push({ player: currentPlayer.name, bid });
-      room.currentBidder = (room.currentBidder + 1) % 4;
+      room.currentBidder = getNextBidder(room);
 
       // 叫到75直接成为庄家
       if (bid === 75) {
-        currentPlayer.isDealer = true;
-        room.dealer = room.currentBidder - 1;
-        if (room.dealer < 0) room.dealer = 3;
-        room.dealerScore = 75;
-        room.state = 'exchanging';
+        setDealer(room, room.players.findIndex(p => p.id === currentPlayer.id), 75);
         // 底牌加入庄家手牌，让庄家选8张作为新底牌
-        io.to(currentPlayer.id).emit('exchange-cards', room.bottomCards);
       }
     }
 
-    io.to(room.id).emit('bid-update', {
-      currentBid: room.currentBid,
-      currentBidder: room.currentBidder,
-      bidHistory: room.bidHistory,
-      state: room.state,
-      dealer: room.dealer
-    });
+    emitBidUpdate(room);
   });
 
   // 选择主牌
@@ -342,7 +345,24 @@ io.on('connection', (socket) => {
     if (dealer.id !== socket.id) return;
 
     // 设置新底牌
+    if (!Array.isArray(newBottomCards) || newBottomCards.length !== 8) {
+      socket.emit('invalid-play', '请选择8张底牌');
+      return;
+    }
+
+    const selectedIds = new Set();
+    for (const card of newBottomCards) {
+      if (!card || selectedIds.has(card.id) || !dealer.hand.some(c => c.id === card.id)) {
+        socket.emit('invalid-play', '底牌选择无效');
+        return;
+      }
+      selectedIds.add(card.id);
+    }
+
     room.bottomCards = newBottomCards;
+    dealer.hand = dealer.hand.filter(card => !selectedIds.has(card.id));
+    dealer.hand.sort((a, b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
+    io.to(dealer.id).emit('hand-sorted', dealer.hand);
 
     // 进入叫主阶段
     room.state = 'choosing-trump';
@@ -451,9 +471,73 @@ function getRoomState(room) {
 }
 
 // 开始游戏
+function emitBidUpdate(room) {
+  io.to(room.id).emit('bid-update', {
+    currentBid: room.currentBid,
+    currentBidder: room.currentBidder,
+    bidHistory: room.bidHistory,
+    state: room.state,
+    dealer: room.dealer,
+    hasValidBid: room.hasValidBid
+  });
+}
+
+function getActiveBidders(room) {
+  return room.players
+    .map((_, index) => index)
+    .filter(index => !room.passedBidders.has(index));
+}
+
+function getNextBidder(room) {
+  const activeBidders = getActiveBidders(room);
+  if (activeBidders.length === 0) return room.currentBidder;
+
+  for (let step = 1; step <= room.players.length; step++) {
+    const next = (room.currentBidder + step) % room.players.length;
+    if (!room.passedBidders.has(next)) return next;
+  }
+
+  return activeBidders[0];
+}
+
+function isValidBid(room, bid) {
+  if (!Number.isInteger(bid) || bid > 100 || bid < 75 || bid % 5 !== 0) return false;
+  return room.hasValidBid ? bid < room.currentBid : bid === 100;
+}
+
+function setDealer(room, dealerIndex, dealerScore) {
+  room.players.forEach(p => { p.isDealer = false; });
+
+  const dealer = room.players[dealerIndex];
+  dealer.isDealer = true;
+  room.dealer = dealerIndex;
+  room.dealerScore = dealerScore;
+  room.state = 'exchanging';
+  dealer.hand = dealer.hand.concat(room.bottomCards);
+  dealer.hand.sort((a, b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
+
+  io.to(dealer.id).emit('hand-sorted', dealer.hand);
+  io.to(dealer.id).emit('exchange-cards', {
+    bottomCards: room.bottomCards,
+    hand: dealer.hand
+  });
+}
+
 function startGame(room) {
   room.state = 'bidding';
   room.deck = shuffle(createDeck());
+  room.players.forEach(p => { p.isDealer = false; });
+  room.currentBid = 100;
+  room.dealer = null;
+  room.trumpSuit = null;
+  room.isNoTrump = false;
+  room.currentRound = [];
+  room.roundScores = [];
+  room.scores.team = 0;
+  room.dealerScore = 0;
+  room.bidHistory = [];
+  room.passedBidders = new Set();
+  room.hasValidBid = false;
 
   // 发牌：每人25张，8张底牌 (共108张)
   room.bottomCards = room.deck.slice(0, 8);
@@ -502,80 +586,231 @@ function startGame(room) {
   io.to(room.id).emit('game-started', {
     currentBidder: room.currentBidder,
     currentBid: room.currentBid,
+    hasValidBid: room.hasValidBid,
     bottomCardCount: 8
   });
 }
 
 // 验证出牌合法性
+// 判断是否为当前主牌（包括常主和主花色）
+function isTrumpCard(card, trumpSuit, isNoTrump) {
+  if (card.suit === 'joker') return true;
+  if (card.rank === '2' || card.rank === '7') return true;
+  if (!isNoTrump && card.suit === trumpSuit) return true;
+  return false;
+}
+
+function getEffectiveSuit(card, trumpSuit, isNoTrump) {
+  return isTrumpCard(card, trumpSuit, isNoTrump) ? 'trump' : card.suit;
+}
+
+function countEffectiveSuit(cards, suit, trumpSuit, isNoTrump) {
+  return cards.filter(c => getEffectiveSuit(c, trumpSuit, isNoTrump) === suit).length;
+}
+
+function getRankIndex(card, trumpSuit, isNoTrump) {
+  const suitOrder = { diamonds: 0, clubs: 1, hearts: 2, spades: 3 };
+  const normalOrder = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+  if (card.rank === 'big') return 100;
+  if (card.rank === 'small') return 99;
+
+  if (getEffectiveSuit(card, trumpSuit, isNoTrump) === 'trump') {
+    if (card.rank === '7') return (!isNoTrump && card.suit === trumpSuit) ? 98 : 94 + (suitOrder[card.suit] || 0);
+    if (card.rank === '2') return (!isNoTrump && card.suit === trumpSuit) ? 93 : 89 + (suitOrder[card.suit] || 0);
+    return normalOrder.indexOf(card.rank);
+  }
+
+  return normalOrder.indexOf(card.rank);
+}
+
+function getFaceKey(card) {
+  return `${card.suit}-${card.rank}`;
+}
+
+function getPairGroups(cards, trumpSuit, isNoTrump) {
+  const groups = new Map();
+  for (const card of cards) {
+    const key = getFaceKey(card);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(card);
+  }
+
+  return [...groups.values()]
+    .filter(group => group.length >= 2)
+    .map(group => ({
+      key: getFaceKey(group[0]),
+      cards: group.slice(0, 2),
+      value: getCardValue(group[0], trumpSuit, isNoTrump),
+      rankIndex: getRankIndex(group[0], trumpSuit, isNoTrump)
+    }))
+    .sort((a, b) => a.rankIndex - b.rankIndex);
+}
+
+function findLongestTractor(pairGroups) {
+  let best = [];
+  let current = [];
+
+  for (const group of pairGroups) {
+    const previous = current[current.length - 1];
+    if (!previous || group.rankIndex === previous.rankIndex + 1) {
+      current.push(group);
+    } else {
+      current = [group];
+    }
+    if (current.length > best.length) best = current.slice();
+  }
+
+  return best.length >= 2 ? best : [];
+}
+
+function analyzePlay(cards, trumpSuit, isNoTrump) {
+  if (!Array.isArray(cards) || cards.length === 0) return { valid: false };
+
+  const suit = getEffectiveSuit(cards[0], trumpSuit, isNoTrump);
+  if (!cards.every(card => getEffectiveSuit(card, trumpSuit, isNoTrump) === suit)) {
+    return { valid: false };
+  }
+
+  const pairGroups = getPairGroups(cards, trumpSuit, isNoTrump);
+  const tractorGroups = findLongestTractor(pairGroups);
+  const values = cards.map(card => getCardValue(card, trumpSuit, isNoTrump));
+  const maxValue = Math.max(...values);
+  const minValue = Math.min(...values);
+
+  let type = 'throw';
+  if (cards.length === 1) type = 'single';
+  else if (cards.length === 2 && pairGroups.length === 1) type = 'pair';
+  else if (cards.length >= 4 && cards.length % 2 === 0 && pairGroups.length * 2 === cards.length && tractorGroups.length === pairGroups.length) type = 'tractor';
+
+  return {
+    valid: true,
+    type,
+    suit,
+    length: cards.length,
+    pairCount: pairGroups.length,
+    tractorLength: tractorGroups.length,
+    maxValue,
+    minValue,
+    compareValue: type === 'tractor' ? Math.max(...tractorGroups.map(group => group.value)) : maxValue
+  };
+}
+
+function handHasPair(cards, suit, trumpSuit, isNoTrump) {
+  return getPairGroups(cards.filter(card => getEffectiveSuit(card, trumpSuit, isNoTrump) === suit), trumpSuit, isNoTrump).length > 0;
+}
+
+function handHasTractor(cards, suit, trumpSuit, isNoTrump, minLength = 2) {
+  const suitedCards = cards.filter(card => getEffectiveSuit(card, trumpSuit, isNoTrump) === suit);
+  return findLongestTractor(getPairGroups(suitedCards, trumpSuit, isNoTrump)).length >= minLength;
+}
+
+function playSatisfiesStructure(playAnalysis, leadAnalysis) {
+  if (leadAnalysis.type === 'tractor') return playAnalysis.type === 'tractor' && playAnalysis.tractorLength >= leadAnalysis.tractorLength;
+  if (leadAnalysis.type === 'pair') return playAnalysis.pairCount >= 1;
+  if (leadAnalysis.tractorLength >= 2) return playAnalysis.tractorLength >= leadAnalysis.tractorLength;
+  if (leadAnalysis.pairCount > 0) return playAnalysis.pairCount >= leadAnalysis.pairCount;
+  return true;
+}
+
+function doesPlayBeat(currentPlay, winningPlay, leadAnalysis, trumpSuit, isNoTrump) {
+  const current = analyzePlay(currentPlay.cards, trumpSuit, isNoTrump);
+  const winning = analyzePlay(winningPlay.cards, trumpSuit, isNoTrump);
+  if (!current.valid || current.length !== leadAnalysis.length) return false;
+  if (!playSatisfiesStructure(current, leadAnalysis)) return false;
+
+  const currentCanCompete = current.suit === leadAnalysis.suit || current.suit === 'trump';
+  if (!currentCanCompete) return false;
+
+  if (current.suit === 'trump' && winning.suit !== 'trump') return true;
+  if (current.suit !== 'trump' && winning.suit === 'trump') return false;
+  if (current.suit !== winning.suit) return false;
+
+  if (leadAnalysis.type === 'single') return current.compareValue > winning.compareValue;
+  if (leadAnalysis.type === 'pair') return current.type === 'pair' && winning.type === 'pair' && current.compareValue > winning.compareValue;
+  if (leadAnalysis.type === 'tractor') {
+    return current.type === 'tractor' && winning.type === 'tractor' &&
+      current.tractorLength === leadAnalysis.tractorLength &&
+      winning.tractorLength === leadAnalysis.tractorLength &&
+      current.compareValue > winning.compareValue;
+  }
+
+  return current.minValue > winning.minValue;
+}
+
+function getBottomMultiplier(analysis) {
+  if (analysis.type === 'pair') return 2;
+  if (analysis.type === 'tractor') return analysis.tractorLength * 2;
+  if (analysis.type === 'throw') return analysis.length;
+  return 1;
+}
+
 function validatePlay(room, cards, playerIndex) {
   const player = room.players[playerIndex];
 
-  // 检查玩家是否有这些牌
+  if (!Array.isArray(cards) || cards.length === 0) {
+    return false;
+  }
+
+  const selectedIds = new Set();
   for (const card of cards) {
-    if (!player.hand.some(c => c.id === card.id)) {
+    if (!card || selectedIds.has(card.id) || !player.hand.some(c => c.id === card.id)) {
       return false;
     }
+    selectedIds.add(card.id);
   }
 
-  // 如果是首家出牌
   if (room.currentRound.length === 0) {
-    // 甩牌需要验证最大性（简化处理）
-    return true;
+    return analyzePlay(cards, room.trumpSuit, room.isNoTrump).valid;
   }
 
-  // 跟牌：必须跟相同花色
   const firstPlay = room.currentRound[0];
-  const leadSuit = firstPlay.cards[0].suit;
-  const hasLeadSuit = player.hand.some(c => c.suit === leadSuit && !c.isTrump);
+  const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
+  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) return false;
 
-  if (hasLeadSuit) {
-    // 有首牌花色必须跟
-    for (const card of cards) {
-      if (card.suit !== leadSuit || card.isTrump) {
-        return false;
+  const leadSuitInHand = countEffectiveSuit(player.hand, leadAnalysis.suit, room.trumpSuit, room.isNoTrump);
+  const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
+  const playedLeadSuitCount = countEffectiveSuit(cards, leadAnalysis.suit, room.trumpSuit, room.isNoTrump);
+  if (playedLeadSuitCount < requiredFollowCount) return false;
+
+  const playedLeadSuitCards = cards.filter(card => getEffectiveSuit(card, room.trumpSuit, room.isNoTrump) === leadAnalysis.suit);
+  const followedLeadSuit = playedLeadSuitCount > 0;
+  const allPlayedTrump = cards.every(card => getEffectiveSuit(card, room.trumpSuit, room.isNoTrump) === 'trump');
+  const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
+
+  if (followedLeadSuit || isTrumpKill) {
+    const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
+    const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
+    const structureAnalysis = analyzePlay(structureCards, room.trumpSuit, room.isNoTrump);
+
+    if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
+      if (handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)) {
+        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength;
       }
+      if (handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
+        return structureAnalysis.valid && structureAnalysis.pairCount > 0;
+      }
+    }
+
+    if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
+        handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
+      return structureAnalysis.valid && structureAnalysis.pairCount > 0;
     }
   }
 
   return true;
 }
 
-// 结束一轮
 function finishRound(room) {
   const firstPlay = room.currentRound[0];
-  const leadSuit = firstPlay.cards[0].suit;
+  const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
   let winner = 0;
-  let maxValue = getCardValue(firstPlay.cards[0], room.trumpSuit, room.isNoTrump);
-
-  // 找出赢家
   for (let i = 1; i < 4; i++) {
-    const play = room.currentRound[i];
-    const card = play.cards[0];
-    const value = getCardValue(card, room.trumpSuit, room.isNoTrump);
-
-    // 如果是主牌
-    if (card.suit === room.trumpSuit || card.isTrump) {
-      const currentWinnerCard = room.currentRound[winner].cards[0];
-      const currentWinnerValue = getCardValue(currentWinnerCard, room.trumpSuit, room.isNoTrump);
-      if (value > currentWinnerValue) {
-        winner = i;
-        maxValue = value;
-      }
-    } else if (card.suit === leadSuit) {
-      // 同花色比大小
-      const currentWinnerCard = room.currentRound[winner].cards[0];
-      const currentWinnerIsTrump = currentWinnerCard.suit === room.trumpSuit || currentWinnerCard.isTrump;
-      if (!currentWinnerIsTrump) {
-        const currentWinnerValue = getCardValue(currentWinnerCard, room.trumpSuit, room.isNoTrump);
-        if (value > currentWinnerValue) {
-          winner = i;
-          maxValue = value;
-        }
-      }
+    if (doesPlayBeat(room.currentRound[i], room.currentRound[winner], leadAnalysis, room.trumpSuit, room.isNoTrump)) {
+      winner = i;
     }
   }
 
-  // 计算得分
   let roundScore = 0;
   for (const play of room.currentRound) {
     for (const card of play.cards) {
@@ -599,19 +834,11 @@ function finishRound(room) {
 
   // 检查是否是最后一轮（抠底）
   const isLastRound = room.players.every(p => p.hand.length === 0);
+  const winnerAnalysis = analyzePlay(room.currentRound[winner].cards, room.trumpSuit, room.isNoTrump);
 
-  if (isLastRound && !winnerIsDealer) {
+  if (isLastRound && !winnerIsDealer && winnerAnalysis.suit === 'trump') {
     // 抠底
-    let multiplier = 1;
-    const winCard = room.currentRound[winner].cards[0];
-
-    // 检查是否是拖拉机抠底
-    if (room.currentRound[winner].cards.length >= 4) {
-      multiplier = 4;
-    } else if (room.currentRound[winner].cards.length >= 2) {
-      multiplier = 2;
-    }
-
+    let multiplier = getBottomMultiplier(winnerAnalysis);
     const bottomScore = room.bottomCards.reduce((sum, c) => sum + getCardScore(c), 0) * multiplier;
     room.scores.team += bottomScore;
 
@@ -673,6 +900,8 @@ function endGame(room) {
   room.scores.team = 0;
   room.bidHistory = [];
   room.currentBid = 100;
+  room.passedBidders = new Set();
+  room.hasValidBid = false;
 }
 
 const PORT = process.env.PORT || 3000;
