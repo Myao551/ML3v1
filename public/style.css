@@ -269,27 +269,66 @@ body {
 
 .dealer-badge {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #facc15;
   color: #111827;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 800;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.28);
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.38);
+  z-index: 5;
+}
+
+.player-score-badge {
+  position: absolute;
+  top: 36px;
+  right: 3px;
+  min-width: 34px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #e5e7eb;
+  border: 1px solid rgba(226, 232, 240, 0.28);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+  z-index: 5;
+}
+
+.player-score-badge.positive {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+}
+
+.player-score-badge.negative {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.45);
 }
 
 .seat-play-pile {
   position: absolute;
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
+  max-width: 260px;
   min-height: 28px;
   pointer-events: none;
+}
+
+.seat-play-group {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.26);
 }
 
 .player-seat.bottom .seat-play-pile {
@@ -398,7 +437,7 @@ body {
 .table-bottom-deck {
   position: absolute;
   left: 50%;
-  top: calc(50% + 86px);
+  top: calc(50% + 132px);
   display: flex;
   transform: translate(-50%, -50%);
   transition: transform 0.65s ease, opacity 0.65s ease;
@@ -769,10 +808,6 @@ body {
 .chat-messages .message {
   margin-bottom: 5px;
   word-break: break-all;
-}
-
-.chat-messages.hide-system .system-message {
-  display: none;
 }
 
 .chat-messages .player-name {
@@ -1348,12 +1383,29 @@ body {
   box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18), 0 8px 18px rgba(0, 0, 0, 0.28);
 }
 
+.card-mini {
+  min-width: 24px;
+  height: 32px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
 .card-mini.red {
+  background: rgba(255, 255, 255, 0.94);
   color: #dc2626;
+  border: 1px solid rgba(220, 38, 38, 0.22);
 }
 
 .card-mini.black {
-  color: #111827;
+  background: rgba(255, 255, 255, 0.94);
+  color: #020617;
+  border: 1px solid rgba(15, 23, 42, 0.22);
 }
 
 .card-mini.joker-mini {

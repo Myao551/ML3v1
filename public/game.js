@@ -24,7 +24,7 @@ const gameState = {
   leadSuit: null,
   joiningRoom: false,
   playHistoryVisible: false,
-  systemMessagesVisible: true,
+  chatVisible: true,
   scoringCards: []
 };
 
@@ -44,7 +44,7 @@ const elements = {
   roomIdDisplay: document.getElementById('room-id-display'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   toggleHistoryBtn: document.getElementById('toggle-history-btn'),
-  toggleSystemBtn: document.getElementById('toggle-system-btn'),
+  toggleChatBtn: document.getElementById('toggle-chat-btn'),
   gameStatus: document.getElementById('game-status'),
   trumpDisplay: document.getElementById('trump-display'),
   readyBtn: document.getElementById('ready-btn'),
@@ -72,6 +72,7 @@ const elements = {
   baseScoreInput: document.getElementById('base-score-input'),
   levelScoreInput: document.getElementById('level-score-input'),
   tableBottomDeck: document.getElementById('table-bottom-deck'),
+  chatBox: document.getElementById('chat-box'),
   chatInput: document.getElementById('chat-input'),
   sendBtn: document.getElementById('send-btn'),
   chatMessages: document.getElementById('chat-messages'),
@@ -145,8 +146,8 @@ function init() {
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
   elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
-  elements.toggleSystemBtn.addEventListener('click', toggleSystemMessages);
-  elements.toggleSystemBtn.classList.add('active');
+  elements.toggleChatBtn.addEventListener('click', toggleChatBox);
+  elements.toggleChatBtn.classList.add('active');
   elements.sendBtn.addEventListener('click', sendChatMessage);
   elements.earlyFinishBtn.addEventListener('click', voteEndGame);
   elements.chatInput.addEventListener('keypress', (e) => {
@@ -240,6 +241,7 @@ function connectSocket() {
     elements.bidHistory.classList.remove('hidden');
     elements.scorePanel.classList.remove('hidden');
     elements.targetScore.textContent = data.currentBid;
+    elements.teamScore.textContent = data.teamScore || 0;
     gameState.currentBidder = data.currentBidder;
     gameState.scoringCards = [];
     renderScoringCards([]);
@@ -468,6 +470,9 @@ function updateRoomDisplay(room) {
     updateSettlementDisplay(room.settlementSettings);
   }
   elements.settlementDisplay.classList.remove('hidden');
+  if (room.scores && typeof room.scores.team === 'number') {
+    elements.teamScore.textContent = room.scores.team;
+  }
   renderScoringCards(room.scoringCards || gameState.scoringCards || []);
 
   const me = room.players.find(p => p.id === gameState.playerId);
@@ -509,6 +514,7 @@ function updateSeatDisplay(seatIndex, player) {
     seatEl.querySelector('.player-name').textContent = player.name;
     seatEl.querySelector('.player-avatar').textContent = (player.name[0] || '?').toUpperCase();
     seatEl.querySelector('.player-cards').textContent = player.cardCount || 25;
+    updatePlayerScoreBadge(seatEl, player.settlementScore || 0);
 
     seatEl.classList.toggle('disconnected', !!player.disconnected);
     if (player.disconnected) {
@@ -540,6 +546,7 @@ function clearSeatDisplay(seatIndex) {
     seatEl.querySelector('.player-status').textContent = '';
     seatEl.classList.remove('dealer');
     updateDealerBadge(seatEl, false);
+    updatePlayerScoreBadge(seatEl, 0);
     seatEl.classList.remove('disconnected');
     delete seatEl.dataset.playerId;
   }
@@ -555,6 +562,24 @@ function updateDealerBadge(seatEl, isDealer) {
   } else if (!isDealer && badge) {
     badge.remove();
   }
+}
+
+function updatePlayerScoreBadge(seatEl, score) {
+  let scoreEl = seatEl.querySelector('.player-score-badge');
+  if (!scoreEl) {
+    scoreEl = document.createElement('div');
+    scoreEl.className = 'player-score-badge';
+    seatEl.appendChild(scoreEl);
+  }
+
+  scoreEl.textContent = formatSignedScore(score);
+  scoreEl.classList.toggle('positive', score > 0);
+  scoreEl.classList.toggle('negative', score < 0);
+}
+
+function formatSignedScore(score) {
+  const value = Number(score) || 0;
+  return value > 0 ? `+${value}` : `${value}`;
 }
 
 function toggleReady() {
@@ -686,6 +711,7 @@ function toggleCardSelection(card, cardEl) {
 }
 
 function playCards() {
+  syncSelectedCardsFromDom();
   if (gameState.selectedCards.length === 0) return;
 
   // 验证出牌规则
@@ -803,6 +829,29 @@ function clientCountEffectiveSuit(cards, suit) {
   return cards.filter(card => getClientEffectiveSuit(card) === suit).length;
 }
 
+function getClientFollowSuitKey(cards) {
+  const leadSuit = getClientEffectiveSuit(cards[0]);
+  if (leadSuit !== 'trump') return leadSuit;
+
+  const sourceSuits = new Set(cards.filter(card => card.suit !== 'joker').map(card => card.suit));
+  return sourceSuits.size === 1 ? `trump:${[...sourceSuits][0]}` : 'trump';
+}
+
+function clientMatchesFollowSuit(card, suitKey) {
+  if (suitKey.startsWith('trump:')) {
+    return isClientTrumpCard(card) && card.suit === suitKey.slice(6);
+  }
+  return getClientEffectiveSuit(card) === suitKey;
+}
+
+function getClientFollowSuitCards(cards, suitKey) {
+  return cards.filter(card => clientMatchesFollowSuit(card, suitKey));
+}
+
+function clientCountFollowSuit(cards, suitKey) {
+  return getClientFollowSuitCards(cards, suitKey).length;
+}
+
 function clientHasPair(cards, suit) {
   return getClientPairGroups(cards.filter(card => getClientEffectiveSuit(card) === suit)).length > 0;
 }
@@ -810,6 +859,14 @@ function clientHasPair(cards, suit) {
 function clientHasTractor(cards, suit, minLength) {
   const suitedCards = cards.filter(card => getClientEffectiveSuit(card) === suit);
   return getClientLongestTractor(getClientPairGroups(suitedCards)).length >= minLength;
+}
+
+function clientFollowSuitHasPair(cards, suitKey) {
+  return getClientPairGroups(getClientFollowSuitCards(cards, suitKey)).length > 0;
+}
+
+function clientFollowSuitHasTractor(cards, suitKey, minLength) {
+  return getClientLongestTractor(getClientPairGroups(getClientFollowSuitCards(cards, suitKey))).length >= minLength;
 }
 
 function validatePlay(cards) {
@@ -826,38 +883,47 @@ function validatePlay(cards) {
     return { valid: false, message: `本轮必须出 ${firstPlay.cards.length} 张牌。` };
   }
 
-  const leadSuitInHand = clientCountEffectiveSuit(gameState.hand, leadAnalysis.suit);
+  const leadFollowSuit = getClientFollowSuitKey(firstPlay.cards);
+  const leadSuitInHand = clientCountFollowSuit(gameState.hand, leadFollowSuit);
   const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
-  const playedLeadSuitCount = clientCountEffectiveSuit(cards, leadAnalysis.suit);
+  const playedLeadSuitCount = clientCountFollowSuit(cards, leadFollowSuit);
   if (playedLeadSuitCount < requiredFollowCount) {
     return { valid: false, message: '你有首家花色时必须优先跟足。' };
   }
 
-  const playedLeadSuitCards = cards.filter(card => getClientEffectiveSuit(card) === leadAnalysis.suit);
+  const playedLeadSuitCards = getClientFollowSuitCards(cards, leadFollowSuit);
   const followedLeadSuit = playedLeadSuitCount > 0;
   const allPlayedTrump = cards.every(card => getClientEffectiveSuit(card) === 'trump');
   const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
   if (followedLeadSuit || isTrumpKill) {
-    const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
+    const obligationSuit = followedLeadSuit ? leadFollowSuit : 'trump';
     const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
     const structureAnalysis = analyzeClientPlay(structureCards);
-    const obligationSuitInHand = clientCountEffectiveSuit(gameState.hand, obligationSuit);
+    const obligationSuitInHand = followedLeadSuit
+      ? clientCountFollowSuit(gameState.hand, obligationSuit)
+      : clientCountEffectiveSuit(gameState.hand, obligationSuit);
+    const hasObligationTractor = followedLeadSuit
+      ? clientFollowSuitHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)
+      : clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength);
+    const hasObligationPair = followedLeadSuit
+      ? clientFollowSuitHasPair(gameState.hand, obligationSuit)
+      : clientHasPair(gameState.hand, obligationSuit);
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
       if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
-          clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)) {
+          hasObligationTractor) {
         return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
           ? { valid: true }
           : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
       }
       if (obligationSuitInHand >= 2 &&
-          clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
+          hasObligationPair && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
         return { valid: false, message: '你没有拖拉机但有对子时必须跟对子。' };
       }
     }
 
     if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
         obligationSuitInHand >= 2 &&
-        clientHasPair(gameState.hand, obligationSuit) && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
+        hasObligationPair && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
       return { valid: false, message: '你有对子时必须跟对子。' };
     }
   }
@@ -1207,11 +1273,11 @@ function togglePlayHistory() {
   elements.toggleHistoryBtn.classList.toggle('active', gameState.playHistoryVisible);
 }
 
-function toggleSystemMessages() {
-  gameState.systemMessagesVisible = !gameState.systemMessagesVisible;
-  elements.toggleSystemBtn.classList.toggle('active', gameState.systemMessagesVisible);
-  elements.toggleSystemBtn.textContent = gameState.systemMessagesVisible ? '\u7cfb\u7edf\u63d0\u793a' : '\u63d0\u793a\u5173\u95ed';
-  elements.chatMessages.classList.toggle('hide-system', !gameState.systemMessagesVisible);
+function toggleChatBox() {
+  gameState.chatVisible = !gameState.chatVisible;
+  elements.chatBox.classList.toggle('hidden', !gameState.chatVisible);
+  elements.toggleChatBtn.classList.toggle('active', gameState.chatVisible);
+  elements.toggleChatBtn.textContent = gameState.chatVisible ? '\u804a\u5929\u6846' : '\u804a\u5929\u5173';
 }
 
 function clearSeatPlayPiles() {
@@ -1220,15 +1286,22 @@ function clearSeatPlayPiles() {
   });
 }
 
+function syncSelectedCardsFromDom() {
+  const selectedIds = new Set([...elements.myHand.querySelectorAll('.card.selected')].map(el => el.dataset.cardId));
+  gameState.selectedCards = gameState.hand.filter(card => selectedIds.has(card.id));
+}
+
 function renderSeatPlayPile(playerIndex, cards) {
   const seatEl = getSeatElement(playerIndex);
   if (!seatEl) return;
   const pile = seatEl.querySelector('.seat-play-pile');
-  pile.innerHTML = '';
+  const group = document.createElement('div');
+  group.className = 'seat-play-group';
   cards.forEach(card => {
     const mini = createMiniCardElement(card);
-    pile.appendChild(mini);
+    group.appendChild(mini);
   });
+  pile.appendChild(group);
 }
 
 function renderScoringCards(cards) {
@@ -1382,16 +1455,11 @@ function sendChatMessage() {
 }
 
 function addChatMessage(player, message) {
-  const isSystem = isSystemMessage(player);
   const msgEl = document.createElement('div');
-  msgEl.className = isSystem ? 'message system-message' : 'message';
+  msgEl.className = 'message';
   msgEl.innerHTML = `<span class="player-name">${player}:</span> ${escapeHtml(message)}`;
   elements.chatMessages.appendChild(msgEl);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
-}
-
-function isSystemMessage(player) {
-  return player === '\u7cfb\u7edf' || player === 'ç³»ç»Ÿ' || player === 'ç»¯è¤ç²º';
 }
 
 function escapeHtml(text) {

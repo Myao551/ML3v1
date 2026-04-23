@@ -590,6 +590,7 @@ function getRoomState(room) {
       cardCount: p.hand.length
     })),
     settlementSettings: room.settlementSettings,
+    scores: room.scores,
     scoringCards: room.scoringCards,
     currentBid: room.currentBid,
     currentBidder: room.currentBidder,
@@ -771,6 +772,7 @@ function startGame(room) {
     currentBidder: room.currentBidder,
     currentBid: room.currentBid,
     hasValidBid: room.hasValidBid,
+    teamScore: room.scores.team,
     bottomCardCount: 8
   });
 }
@@ -790,6 +792,29 @@ function getEffectiveSuit(card, trumpSuit, isNoTrump) {
 
 function countEffectiveSuit(cards, suit, trumpSuit, isNoTrump) {
   return cards.filter(c => getEffectiveSuit(c, trumpSuit, isNoTrump) === suit).length;
+}
+
+function getFollowSuitKey(cards, trumpSuit, isNoTrump) {
+  const leadSuit = getEffectiveSuit(cards[0], trumpSuit, isNoTrump);
+  if (leadSuit !== 'trump') return leadSuit;
+
+  const sourceSuits = new Set(cards.filter(card => card.suit !== 'joker').map(card => card.suit));
+  return sourceSuits.size === 1 ? `trump:${[...sourceSuits][0]}` : 'trump';
+}
+
+function matchesFollowSuit(card, suitKey, trumpSuit, isNoTrump) {
+  if (suitKey.startsWith('trump:')) {
+    return isTrumpCard(card, trumpSuit, isNoTrump) && card.suit === suitKey.slice(6);
+  }
+  return getEffectiveSuit(card, trumpSuit, isNoTrump) === suitKey;
+}
+
+function getFollowSuitCards(cards, suitKey, trumpSuit, isNoTrump) {
+  return cards.filter(card => matchesFollowSuit(card, suitKey, trumpSuit, isNoTrump));
+}
+
+function countFollowSuit(cards, suitKey, trumpSuit, isNoTrump) {
+  return getFollowSuitCards(cards, suitKey, trumpSuit, isNoTrump).length;
 }
 
 function getRankIndex(card, trumpSuit, isNoTrump) {
@@ -887,6 +912,14 @@ function handHasPair(cards, suit, trumpSuit, isNoTrump) {
 function handHasTractor(cards, suit, trumpSuit, isNoTrump, minLength = 2) {
   const suitedCards = cards.filter(card => getEffectiveSuit(card, trumpSuit, isNoTrump) === suit);
   return findLongestTractor(getPairGroups(suitedCards, trumpSuit, isNoTrump)).length >= minLength;
+}
+
+function followSuitHasPair(cards, suitKey, trumpSuit, isNoTrump) {
+  return getPairGroups(getFollowSuitCards(cards, suitKey, trumpSuit, isNoTrump), trumpSuit, isNoTrump).length > 0;
+}
+
+function followSuitHasTractor(cards, suitKey, trumpSuit, isNoTrump, minLength = 2) {
+  return findLongestTractor(getPairGroups(getFollowSuitCards(cards, suitKey, trumpSuit, isNoTrump), trumpSuit, isNoTrump)).length >= minLength;
 }
 
 function playSatisfiesStructure(playAnalysis, leadAnalysis) {
@@ -993,36 +1026,45 @@ function validatePlay(room, cards, playerIndex) {
   const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
   if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) return false;
 
-  const leadSuitInHand = countEffectiveSuit(player.hand, leadAnalysis.suit, room.trumpSuit, room.isNoTrump);
+  const leadFollowSuit = getFollowSuitKey(firstPlay.cards, room.trumpSuit, room.isNoTrump);
+  const leadSuitInHand = countFollowSuit(player.hand, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
-  const playedLeadSuitCount = countEffectiveSuit(cards, leadAnalysis.suit, room.trumpSuit, room.isNoTrump);
+  const playedLeadSuitCount = countFollowSuit(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   if (playedLeadSuitCount < requiredFollowCount) return false;
 
-  const playedLeadSuitCards = cards.filter(card => getEffectiveSuit(card, room.trumpSuit, room.isNoTrump) === leadAnalysis.suit);
+  const playedLeadSuitCards = getFollowSuitCards(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   const followedLeadSuit = playedLeadSuitCount > 0;
   const allPlayedTrump = cards.every(card => getEffectiveSuit(card, room.trumpSuit, room.isNoTrump) === 'trump');
   const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
 
   if (followedLeadSuit || isTrumpKill) {
-    const obligationSuit = followedLeadSuit ? leadAnalysis.suit : 'trump';
+    const obligationSuit = followedLeadSuit ? leadFollowSuit : 'trump';
     const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
     const structureAnalysis = analyzePlay(structureCards, room.trumpSuit, room.isNoTrump);
-    const obligationSuitInHand = countEffectiveSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
+    const obligationSuitInHand = followedLeadSuit
+      ? countFollowSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)
+      : countEffectiveSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
+    const hasObligationTractor = followedLeadSuit
+      ? followSuitHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)
+      : handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength);
+    const hasObligationPair = followedLeadSuit
+      ? followSuitHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)
+      : handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
 
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
       if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
-          handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)) {
+          hasObligationTractor) {
         return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength;
       }
       if (obligationSuitInHand >= 2 &&
-          handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
+          hasObligationPair) {
         return structureAnalysis.valid && structureAnalysis.pairCount > 0;
       }
     }
 
     if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
         obligationSuitInHand >= 2 &&
-        handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)) {
+        hasObligationPair) {
       return structureAnalysis.valid && structureAnalysis.pairCount > 0;
     }
   }
