@@ -166,40 +166,95 @@ function createRoom(roomId) {
   };
 }
 
+function normalizePlayerPayload(payload) {
+  if (typeof payload === 'string') {
+    return { name: payload.trim(), sessionId: null };
+  }
+
+  return {
+    name: String(payload?.name || '').trim(),
+    sessionId: payload?.sessionId || null
+  };
+}
+
+function attachSocketToPlayer(socket, room, player) {
+  if (player.disconnectTimer) {
+    clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = null;
+  }
+
+  player.id = socket.id;
+  player.disconnected = false;
+  socket.join(room.id);
+  socket.roomId = room.id;
+  socket.playerId = socket.id;
+  socket.sessionId = player.sessionId;
+}
+
 // Socket.io连接处理
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
   // 创建房间
-  socket.on('create-room', (playerName, callback) => {
+  socket.on('create-room', (playerPayload, callback) => {
+    const { name: playerName, sessionId } = normalizePlayerPayload(playerPayload);
+    if (!playerName) {
+      callback({ success: false, error: '请输入昵称' });
+      return;
+    }
+
     const roomId = uuidv4().slice(0, 8);
     const room = createRoom(roomId);
 
     const player = {
       id: socket.id,
+      sessionId: sessionId || uuidv4(),
       name: playerName,
       seat: 0,
       hand: [],
       isReady: false,
-      isDealer: false
+      isDealer: false,
+      disconnected: false,
+      disconnectTimer: null
     };
 
     room.players.push(player);
     rooms.set(roomId, room);
-    socket.join(roomId);
-    socket.roomId = roomId;
-    socket.playerId = socket.id;
+    attachSocketToPlayer(socket, room, player);
 
-    callback({ success: true, roomId, playerId: socket.id });
+    callback({ success: true, roomId, playerId: socket.id, sessionId: player.sessionId });
     io.to(roomId).emit('room-update', getRoomState(room));
   });
 
   // 加入房间
-  socket.on('join-room', (roomId, playerName, callback) => {
+  socket.on('join-room', (roomId, playerPayload, callback) => {
+    const { name: playerName, sessionId } = normalizePlayerPayload(playerPayload);
     const room = rooms.get(roomId);
 
     if (!room) {
       callback({ success: false, error: '房间不存在' });
+      return;
+    }
+
+    if (!playerName) {
+      callback({ success: false, error: '请输入昵称' });
+      return;
+    }
+
+    if (sessionId) {
+      const existingPlayer = room.players.find(p => p.sessionId === sessionId);
+      if (existingPlayer) {
+        existingPlayer.name = playerName;
+        attachSocketToPlayer(socket, room, existingPlayer);
+        callback({ success: true, roomId, playerId: socket.id, sessionId: existingPlayer.sessionId, rejoined: true });
+        io.to(room.id).emit('room-update', getRoomState(room));
+        return;
+      }
+    }
+
+    const duplicateName = room.players.some(p => p.name.trim().toLowerCase() === playerName.toLowerCase());
+    if (duplicateName) {
+      callback({ success: false, error: '该昵称已在房间中，请直接回到原页面或更换昵称' });
       return;
     }
 
@@ -215,23 +270,45 @@ io.on('connection', (socket) => {
 
     const player = {
       id: socket.id,
+      sessionId: sessionId || uuidv4(),
       name: playerName,
       seat: room.players.length,
       hand: [],
       isReady: false,
-      isDealer: false
+      isDealer: false,
+      disconnected: false,
+      disconnectTimer: null
     };
 
     room.players.push(player);
-    socket.join(roomId);
-    socket.roomId = roomId;
-    socket.playerId = socket.id;
+    attachSocketToPlayer(socket, room, player);
 
-    callback({ success: true, roomId, playerId: socket.id });
+    callback({ success: true, roomId, playerId: socket.id, sessionId: player.sessionId });
     io.to(roomId).emit('room-update', getRoomState(room));
   });
 
   // 玩家准备
+  socket.on('rejoin-room', (data, callback = () => {}) => {
+    const roomId = data?.roomId;
+    const sessionId = data?.sessionId;
+    const room = rooms.get(roomId);
+
+    if (!room || !sessionId) {
+      callback({ success: false });
+      return;
+    }
+
+    const player = room.players.find(p => p.sessionId === sessionId);
+    if (!player) {
+      callback({ success: false });
+      return;
+    }
+
+    attachSocketToPlayer(socket, room, player);
+    callback({ success: true, roomId, playerId: socket.id, sessionId });
+    io.to(room.id).emit('room-update', getRoomState(room));
+  });
+
   socket.on('player-ready', (isReady) => {
     const room = rooms.get(socket.roomId);
     if (!room) return;
@@ -456,13 +533,27 @@ io.on('connection', (socket) => {
     if (room) {
       const idx = room.players.findIndex(p => p.id === socket.id);
       if (idx !== -1) {
-        room.players.splice(idx, 1);
-        if (room.players.length === 0) {
-          rooms.delete(socket.roomId);
-        } else {
-          io.to(room.id).emit('player-left', { playerId: socket.id });
-          io.to(room.id).emit('room-update', getRoomState(room));
-        }
+        const player = room.players[idx];
+        player.disconnected = true;
+        io.to(room.id).emit('room-update', getRoomState(room));
+
+        player.disconnectTimer = setTimeout(() => {
+          const currentRoom = rooms.get(room.id);
+          if (!currentRoom) return;
+
+          const currentIdx = currentRoom.players.findIndex(p => p.sessionId === player.sessionId && p.disconnected);
+          if (currentIdx === -1) return;
+
+          currentRoom.players.splice(currentIdx, 1);
+          currentRoom.players.forEach((p, seat) => { p.seat = seat; });
+
+          if (currentRoom.players.length === 0) {
+            rooms.delete(room.id);
+          } else {
+            io.to(currentRoom.id).emit('player-left', { playerId: socket.id });
+            io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
+          }
+        }, 60000);
       }
     }
   });
@@ -479,6 +570,7 @@ function getRoomState(room) {
       seat: p.seat,
       isReady: p.isReady,
       isDealer: p.isDealer,
+      disconnected: !!p.disconnected,
       cardCount: p.hand.length
     })),
     currentBid: room.currentBid,

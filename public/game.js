@@ -3,6 +3,7 @@ const gameState = {
   socket: null,
   roomId: null,
   playerId: null,
+  sessionId: null,
   playerName: '',
   seat: 0,
   hand: [],
@@ -20,7 +21,8 @@ const gameState = {
   isExchanging: false,
   playHistory: [],
   currentRound: [],
-  leadSuit: null
+  leadSuit: null,
+  joiningRoom: false
 };
 
 // DOM元素
@@ -73,6 +75,23 @@ const elements = {
   earlyFinishText: document.getElementById('early-finish-text'),
   earlyFinishBtn: document.getElementById('early-finish-btn')
 };
+
+function getSessionId() {
+  let sessionId = localStorage.getItem('sanda1-session-id');
+  if (!sessionId) {
+    sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem('sanda1-session-id', sessionId);
+  }
+  gameState.sessionId = sessionId;
+  return sessionId;
+}
+
+function setJoinBusy(isBusy) {
+  gameState.joiningRoom = isBusy;
+  elements.createRoomBtn.disabled = isBusy;
+  elements.confirmJoinBtn.disabled = isBusy;
+  elements.joinRoomBtn.disabled = isBusy;
+}
 
 // 初始化
 function init() {
@@ -147,10 +166,26 @@ function init() {
 
 // 连接服务器
 function connectSocket() {
+  if (gameState.socket?.connected) return;
+  if (gameState.socket) {
+    gameState.socket.removeAllListeners();
+    gameState.socket.disconnect();
+  }
+
   gameState.socket = io();
 
   gameState.socket.on('connect', () => {
     console.log('Connected to server');
+    if (gameState.roomId && gameState.sessionId) {
+      gameState.socket.emit('rejoin-room', {
+        roomId: gameState.roomId,
+        sessionId: gameState.sessionId
+      }, (response) => {
+        if (response?.success) {
+          gameState.playerId = response.playerId;
+        }
+      });
+    }
   });
 
   gameState.socket.on('room-update', (room) => {
@@ -300,12 +335,15 @@ function connectSocket() {
 
   gameState.socket.on('connect_error', (error) => {
     console.error('Connection error:', error);
+    setJoinBusy(false);
     alert('连接服务器失败，请刷新页面重试');
   });
 }
 
 // 创建房间
 function createRoom() {
+  if (gameState.joiningRoom) return;
+
   const name = elements.playerNameInput.value.trim();
   if (!name) {
     alert('请输入昵称');
@@ -313,20 +351,26 @@ function createRoom() {
   }
 
   gameState.playerName = name;
+  gameState.sessionId = getSessionId();
+  setJoinBusy(true);
   connectSocket();
 
-  gameState.socket.emit('create-room', name, (response) => {
+  gameState.socket.emit('create-room', { name, sessionId: gameState.sessionId }, (response) => {
     if (response.success) {
       gameState.roomId = response.roomId;
       gameState.playerId = response.playerId;
+      gameState.sessionId = response.sessionId || gameState.sessionId;
       enterGame();
     } else {
       alert(response.error);
+      setJoinBusy(false);
     }
   });
 }
 
 function joinRoom() {
+  if (gameState.joiningRoom) return;
+
   const name = elements.playerNameInput.value.trim();
   const roomId = elements.roomIdInput.value.trim();
 
@@ -340,15 +384,19 @@ function joinRoom() {
   }
 
   gameState.playerName = name;
+  gameState.sessionId = getSessionId();
+  setJoinBusy(true);
   connectSocket();
 
-  gameState.socket.emit('join-room', roomId, name, (response) => {
+  gameState.socket.emit('join-room', roomId, { name, sessionId: gameState.sessionId }, (response) => {
     if (response.success) {
       gameState.roomId = response.roomId;
       gameState.playerId = response.playerId;
+      gameState.sessionId = response.sessionId || gameState.sessionId;
       enterGame();
     } else {
       alert(response.error);
+      setJoinBusy(false);
     }
   });
 }
@@ -356,6 +404,7 @@ function joinRoom() {
 function enterGame() {
   elements.homeScreen.classList.remove('active');
   elements.gameScreen.classList.add('active');
+  setJoinBusy(false);
   elements.roomIdDisplay.textContent = `房间：${gameState.roomId}`;
   elements.myName.textContent = gameState.playerName;
 
@@ -401,10 +450,13 @@ function updateSeatDisplay(relativeSeat, player) {
 
   if (seatEl) {
     seatEl.querySelector('.player-name').textContent = player.name;
-    seatEl.querySelector('.player-avatar').textContent = player.name[0].toUpperCase();
+    seatEl.querySelector('.player-avatar').textContent = (player.name[0] || '?').toUpperCase();
     seatEl.querySelector('.player-cards').textContent = player.cardCount || 25;
 
-    if (player.isReady) {
+    seatEl.classList.toggle('disconnected', !!player.disconnected);
+    if (player.disconnected) {
+      seatEl.querySelector('.player-status').textContent = '重连中';
+    } else if (player.isReady) {
       seatEl.querySelector('.player-status').textContent = '已准备';
     } else if (player.isDealer) {
       seatEl.querySelector('.player-status').textContent = '庄家';
@@ -428,6 +480,7 @@ function clearSeatDisplay(relativeSeat) {
     seatEl.querySelector('.player-cards').textContent = '0';
     seatEl.querySelector('.player-status').textContent = '';
     seatEl.classList.remove('dealer');
+    seatEl.classList.remove('disconnected');
     delete seatEl.dataset.playerId;
   }
 }

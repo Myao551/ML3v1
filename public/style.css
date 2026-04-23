@@ -1051,6 +1051,11 @@ body {
   border-color: #facc15;
 }
 
+.player-seat.disconnected {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
 .player-avatar {
   background: linear-gradient(135deg, #f8fafc, #94a3b8);
   color: #0f172a;
@@ -1243,16 +1248,17 @@ body {
   z-index: 6;
 }
 
-/* Keep chat below the top bar instead of clipping under it. */
+/* Keep chat in the lower-right now that the hand fits in one row. */
 .chat-box {
-  top: 86px;
+  top: auto;
+  bottom: 18px;
   right: 16px;
-  width: 260px;
+  width: 280px;
   z-index: 70;
 }
 
 .chat-messages {
-  height: 170px;
+  height: 150px;
 }
 
 @media (max-width: 768px) {
@@ -1271,8 +1277,13 @@ body {
   }
 
   .chat-box {
-    top: 78px;
+    top: auto;
+    bottom: 12px;
     right: 8px;
     width: min(240px, calc(100vw - 16px));
+  }
+
+  .chat-messages {
+    height: 128px;
   }
 }
