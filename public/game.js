@@ -561,7 +561,12 @@ function updatePlayerScoreBadge(seatEl, score) {
   if (!scoreEl) {
     scoreEl = document.createElement('div');
     scoreEl.className = 'player-score-badge';
-    seatEl.appendChild(scoreEl);
+    const cardsEl = seatEl.querySelector('.player-cards');
+    if (cardsEl) {
+      seatEl.insertBefore(scoreEl, cardsEl);
+    } else {
+      seatEl.appendChild(scoreEl);
+    }
   }
 
   scoreEl.textContent = formatSignedScore(score);
