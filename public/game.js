@@ -758,16 +758,17 @@ function getClientEffectiveSuit(card) {
 }
 
 function getClientRankIndex(card) {
-  const suitOrder = { diamonds: 0, clubs: 1, hearts: 2, spades: 3 };
   const normalOrder = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+  if (getClientEffectiveSuit(card) === 'trump') {
+    if (card.rank === 'big') return 16;
+    if (card.rank === 'small') return 15;
+    if (card.rank === '7') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 14 : 13;
+    if (card.rank === '2') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 12 : 11;
+  }
 
   if (card.rank === 'big') return 100;
   if (card.rank === 'small') return 99;
-  if (getClientEffectiveSuit(card) === 'trump') {
-    if (card.rank === '7') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 98 : 94 + (suitOrder[card.suit] || 0);
-    if (card.rank === '2') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 93 : 89 + (suitOrder[card.suit] || 0);
-  }
-
   return normalOrder.indexOf(card.rank);
 }
 
@@ -831,16 +832,10 @@ function clientCountEffectiveSuit(cards, suit) {
 
 function getClientFollowSuitKey(cards) {
   const leadSuit = getClientEffectiveSuit(cards[0]);
-  if (leadSuit !== 'trump') return leadSuit;
-
-  const sourceSuits = new Set(cards.filter(card => card.suit !== 'joker').map(card => card.suit));
-  return sourceSuits.size === 1 ? `trump:${[...sourceSuits][0]}` : 'trump';
+  return leadSuit;
 }
 
 function clientMatchesFollowSuit(card, suitKey) {
-  if (suitKey.startsWith('trump:')) {
-    return isClientTrumpCard(card) && card.suit === suitKey.slice(6);
-  }
   return getClientEffectiveSuit(card) === suitKey;
 }
 
