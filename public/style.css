@@ -1523,3 +1523,286 @@ body {
     height: 110px;
   }
 }
+
+@media (max-width: 768px) {
+  body {
+    overflow: auto;
+  }
+
+  .screen,
+  .screen.active {
+    width: 100%;
+    min-height: 100dvh;
+    height: auto;
+  }
+
+  .home-container {
+    width: calc(100vw - 24px);
+    margin: 12px;
+    padding: 20px 16px;
+  }
+
+  .join-row,
+  .button-group {
+    grid-template-columns: 1fr;
+  }
+
+  .game-container {
+    height: auto;
+    min-height: 100dvh;
+    padding: 8px;
+    gap: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .top-bar {
+    padding: 10px 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .room-info,
+  .game-info {
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .settlement-display {
+    width: 100%;
+    justify-content: center;
+    margin-top: 0;
+  }
+
+  .table {
+    flex: none;
+    min-height: 350px;
+    padding: 8px;
+    gap: 6px;
+    grid-template-columns: 68px 1fr 68px;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  .player-seat {
+    min-width: 0;
+    padding: 6px 4px;
+    gap: 3px;
+    overflow: visible;
+  }
+
+  .player-seat.top {
+    max-width: 132px;
+    width: 100%;
+  }
+
+  .player-seat.left,
+  .player-seat.right {
+    width: 68px;
+    align-self: start;
+    margin-top: 28px;
+  }
+
+  .player-seat.bottom {
+    width: 100%;
+    max-width: 180px;
+  }
+
+  .player-avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 14px;
+  }
+
+  .player-name {
+    max-width: 100%;
+    font-size: 11px;
+  }
+
+  .player-cards,
+  .player-status {
+    font-size: 10px;
+  }
+
+  .dealer-badge {
+    top: -6px;
+    right: -4px;
+    width: 22px;
+    height: 22px;
+    font-size: 12px;
+  }
+
+  .player-score-badge {
+    top: 24px;
+    right: -4px;
+    min-width: 28px;
+    padding: 1px 5px;
+    font-size: 10px;
+  }
+
+  .seat-play-pile {
+    max-width: 118px;
+    gap: 2px;
+  }
+
+  .player-seat.left .seat-play-pile,
+  .player-seat.right .seat-play-pile {
+    top: calc(100% + 4px);
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    margin: 0;
+    justify-content: center;
+  }
+
+  .player-seat.top .seat-play-pile {
+    margin-top: 4px;
+  }
+
+  .player-seat.bottom .seat-play-pile {
+    margin-bottom: 4px;
+  }
+
+  .seat-play-group {
+    max-width: 118px;
+    overflow: hidden;
+  }
+
+  .table-center {
+    gap: 10px;
+    min-width: 0;
+    padding: 18px 0 6px;
+  }
+
+  .played-cards-area {
+    gap: 6px;
+    max-width: 220px;
+  }
+
+  .played-card {
+    width: 38px;
+    height: 54px;
+  }
+
+  .played-card .rank {
+    font-size: 11px;
+  }
+
+  .played-card .suit {
+    font-size: 14px;
+  }
+
+  .panel,
+  #bottom-cards-panel {
+    width: min(calc(100vw - 24px), 360px);
+    max-width: none;
+    padding: 14px 12px;
+  }
+
+  #bottom-cards-panel {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+    max-height: min(62vh, 520px);
+    z-index: 220;
+  }
+
+  #bottom-cards-panel .cards-display {
+    max-height: 36vh;
+  }
+
+  .bid-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .bid-btn,
+  .suit-btn {
+    padding: 10px 8px;
+    font-size: 14px;
+  }
+
+  .play-history {
+    position: static;
+    width: 100%;
+    max-height: 150px;
+    margin-top: 4px;
+  }
+
+  .bid-history,
+  .score-panel,
+  .chat-box {
+    position: static;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    inset: auto;
+    order: 10;
+  }
+
+  .bid-history,
+  .score-panel {
+    padding: 12px;
+  }
+
+  .chat-box {
+    z-index: auto;
+  }
+
+  .chat-messages {
+    height: 112px;
+  }
+
+  .scoring-card-list {
+    max-width: none;
+  }
+
+  .hand-area {
+    position: sticky;
+    bottom: 0;
+    z-index: 80;
+    margin-top: 0;
+    padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
+    background: rgba(15, 23, 42, 0.96);
+    backdrop-filter: blur(10px);
+  }
+
+  .hand-cards {
+    min-height: 90px;
+    padding: 8px 12px 10px 20px;
+  }
+
+  .hand-cards .card {
+    flex-basis: 42px;
+    width: 42px;
+    height: 60px;
+    margin-left: -16px;
+  }
+
+  .hand-cards .card .rank {
+    font-size: 13px;
+  }
+
+  .hand-cards .card .suit {
+    font-size: 16px;
+  }
+
+  .hand-actions {
+    gap: 8px;
+  }
+
+  .hand-actions .btn {
+    flex: 1 1 0;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .modal-content {
+    width: calc(100vw - 20px);
+    max-height: 88vh;
+    padding: 20px 16px;
+  }
+}
