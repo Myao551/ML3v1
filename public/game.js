@@ -142,7 +142,7 @@ function init() {
     elements.rulesModal.classList.add('hidden');
   });
   elements.readyBtn.addEventListener('click', toggleReady);
-  elements.playBtn.addEventListener('click', playCards);
+  elements.playBtn.addEventListener('click', handlePlayBtnClick);
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
   elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
@@ -166,10 +166,7 @@ function init() {
     // 重置底牌面板状态
     gameState.exchangePanelShown = false;
     // 恢复出牌按钮的事件绑定
-    const newPlayBtn = elements.playBtn.cloneNode(true);
-    elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
-    elements.playBtn = newPlayBtn;
-    elements.playBtn.addEventListener('click', playCards);
+    configurePlayButton('play');
   });
 
   // 叫分按钮
@@ -305,13 +302,8 @@ function connectSocket() {
     updateCurrentPlayer(data.currentPlayer);
 
     // 恢复出牌按钮的事件绑定
-    const newPlayBtn = elements.playBtn.cloneNode(true);
-    elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
-    elements.playBtn = newPlayBtn;
-    elements.playBtn.dataset.action = 'play';
-    elements.playBtn.textContent = '出牌';
+    configurePlayButton('play');
     elements.playBtn.classList.add('hidden');
-    elements.playBtn.addEventListener('click', playCards);
   });
 
   gameState.socket.on('cards-played', (data) => {
@@ -1067,33 +1059,7 @@ function showExchangePanel(payload) {
   elements.playBtn.dataset.action = 'exchange';
   elements.playBtn.textContent = '\u786e\u5b9a\u5e95\u724c';
 
-  const newPlayBtn = elements.playBtn.cloneNode(true);
-  elements.playBtn.parentNode.replaceChild(newPlayBtn, elements.playBtn);
-  elements.playBtn = newPlayBtn;
-
-  elements.playBtn.addEventListener('click', () => {
-    const selectedCards = document.querySelectorAll('.card.selected');
-    if (selectedCards.length !== 8) {
-      alert(`\u8bf7\u9009\u62e9 8 \u5f20\u724c\u4f5c\u4e3a\u5e95\u724c\uff0c\u5f53\u524d\u9009\u62e9\u4e86 ${selectedCards.length} \u5f20\u3002`);
-      return;
-    }
-
-    const selectedCardsData = [...selectedCards]
-      .map(el => gameState.hand.find(card => card.id === el.dataset.cardId))
-      .filter(Boolean);
-
-    gameState.bottomCards = selectedCardsData;
-    gameState.hand = gameState.hand.filter(card => !selectedCardsData.some(selected => selected.id === card.id));
-    gameState.socket.emit('finish-exchange', gameState.bottomCards);
-
-    gameState.isExchanging = false;
-    gameState.selectedCards = [];
-    elements.playBtn.dataset.action = 'play';
-    elements.playBtn.textContent = '\u51fa\u724c';
-    elements.playBtn.classList.add('hidden');
-    renderHand();
-    addChatMessage('\u7cfb\u7edf', '\u5e95\u724c\u5df2\u786e\u5b9a\uff0c\u7b49\u5f85\u5e84\u5bb6\u9009\u4e3b\u3002');
-  });
+  configurePlayButton('exchange');
 }
 
 function resetExchangePanel() {
@@ -1102,6 +1068,43 @@ function resetExchangePanel() {
 }
 
 function finishExchange(newBottomCards) {
+}
+
+function handlePlayBtnClick() {
+  const action = elements.playBtn.dataset.action || 'play';
+  if (action === 'exchange') {
+    confirmExchangeSelection();
+    return;
+  }
+  playCards();
+}
+
+function configurePlayButton(action) {
+  elements.playBtn.dataset.action = action;
+  elements.playBtn.textContent = action === 'exchange' ? '\u786e\u5b9a\u5e95\u724c' : '\u51fa\u724c';
+}
+
+function confirmExchangeSelection() {
+  const selectedCards = document.querySelectorAll('.card.selected');
+  if (selectedCards.length !== 8) {
+    alert(`\u8bf7\u9009\u62e9 8 \u5f20\u724c\u4f5c\u4e3a\u5e95\u724c\uff0c\u5f53\u524d\u9009\u62e9\u4e86 ${selectedCards.length} \u5f20\u3002`);
+    return;
+  }
+
+  const selectedCardsData = [...selectedCards]
+    .map(el => gameState.hand.find(card => card.id === el.dataset.cardId))
+    .filter(Boolean);
+
+  gameState.bottomCards = selectedCardsData;
+  gameState.hand = gameState.hand.filter(card => !selectedCardsData.some(selected => selected.id === card.id));
+  gameState.socket.emit('finish-exchange', gameState.bottomCards);
+
+  gameState.isExchanging = false;
+  gameState.selectedCards = [];
+  configurePlayButton('play');
+  elements.playBtn.classList.add('hidden');
+  renderHand();
+  addChatMessage('\u7cfb\u7edf', '\u5e95\u724c\u5df2\u786e\u5b9a\uff0c\u7b49\u5f85\u5e84\u5bb6\u9009\u4e3b\u3002');
 }
 
 function showPlayedCards(playerIndex, cards) {

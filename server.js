@@ -371,6 +371,7 @@ io.on('connection', (socket) => {
       if (activeBidders.length === 1 && room.hasValidBid) {
         // 确定庄家
         setDealer(room, activeBidders[0], room.currentBid);
+        return;
 
         // 底牌加入庄家手牌，让庄家选8张作为新底牌
       }
@@ -388,6 +389,7 @@ io.on('connection', (socket) => {
       // 叫到75直接成为庄家
       if (bid === 75) {
         setDealer(room, room.players.findIndex(p => p.id === currentPlayer.id), 75);
+        return;
         // 底牌加入庄家手牌，让庄家选8张作为新底牌
       }
     }
@@ -493,8 +495,9 @@ io.on('connection', (socket) => {
     if (room.players[room.currentPlayer].id !== socket.id) return;
 
     // 验证牌型合法性
-    if (!validatePlay(room, cards, room.currentPlayer)) {
-      socket.emit('invalid-play', '无效的出牌');
+    const validation = validatePlay(room, cards, room.currentPlayer);
+    if (!validation.valid) {
+      socket.emit('invalid-play', validation.message);
       return;
     }
 
@@ -1001,30 +1004,36 @@ function validatePlay(room, cards, playerIndex) {
   const player = room.players[playerIndex];
 
   if (!Array.isArray(cards) || cards.length === 0) {
-    return false;
+    return { valid: false, message: '请选择要出的牌。' };
   }
 
   const selectedIds = new Set();
   for (const card of cards) {
     if (!card || selectedIds.has(card.id) || !player.hand.some(c => c.id === card.id)) {
-      return false;
+      return { valid: false, message: '所选牌无效或不在当前手牌中。' };
     }
     selectedIds.add(card.id);
   }
 
   if (room.currentRound.length === 0) {
-    return analyzePlay(cards, room.trumpSuit, room.isNoTrump).valid;
+    return analyzePlay(cards, room.trumpSuit, room.isNoTrump).valid
+      ? { valid: true }
+      : { valid: false, message: '首家出牌必须是同一有效花色的合法牌型。' };
   }
 
   const firstPlay = room.currentRound[0];
   const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
-  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) return false;
+  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) {
+    return { valid: false, message: `本轮必须出 ${firstPlay.cards.length} 张牌。` };
+  }
 
   const leadFollowSuit = getFollowSuitKey(firstPlay.cards, room.trumpSuit, room.isNoTrump);
   const leadSuitInHand = countFollowSuit(player.hand, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
   const playedLeadSuitCount = countFollowSuit(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
-  if (playedLeadSuitCount < requiredFollowCount) return false;
+  if (playedLeadSuitCount < requiredFollowCount) {
+    return { valid: false, message: '有首家花色时必须优先跟足。' };
+  }
 
   const playedLeadSuitCards = getFollowSuitCards(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   const followedLeadSuit = playedLeadSuitCount > 0;
@@ -1048,22 +1057,28 @@ function validatePlay(room, cards, playerIndex) {
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
       if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
           hasObligationTractor) {
-        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength;
+        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
+          ? { valid: true }
+          : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
       }
       if (obligationSuitInHand >= 2 &&
           hasObligationPair) {
-        return structureAnalysis.valid && structureAnalysis.pairCount > 0;
+        return structureAnalysis.valid && structureAnalysis.pairCount > 0
+          ? { valid: true }
+          : { valid: false, message: '你没有拖拉机但有对子时，必须优先跟对子。' };
       }
     }
 
     if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
         obligationSuitInHand >= 2 &&
         hasObligationPair) {
-      return structureAnalysis.valid && structureAnalysis.pairCount > 0;
+      return structureAnalysis.valid && structureAnalysis.pairCount > 0
+        ? { valid: true }
+        : { valid: false, message: '你有对子时必须跟对子。' };
     }
   }
 
-  return true;
+  return { valid: true };
 }
 
 function finishRound(room) {
