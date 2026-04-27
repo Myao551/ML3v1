@@ -25,7 +25,15 @@ const gameState = {
   joiningRoom: false,
   playHistoryVisible: false,
   chatVisible: true,
-  scoringCards: []
+  scoringCards: [],
+  countdownTimer: null,
+  countdownKey: null
+};
+
+const COUNTDOWN_SECONDS = {
+  bidding: 20,
+  choosingTrump: 20,
+  playing: 30
 };
 
 // DOM元素
@@ -47,6 +55,7 @@ const elements = {
   toggleChatBtn: document.getElementById('toggle-chat-btn'),
   gameStatus: document.getElementById('game-status'),
   trumpDisplay: document.getElementById('trump-display'),
+  countdownDisplay: document.getElementById('countdown-display'),
   readyBtn: document.getElementById('ready-btn'),
   playBtn: document.getElementById('play-btn'),
   myHand: document.getElementById('my-hand'),
@@ -115,6 +124,46 @@ function updateSettlementDisplay(settings) {
   const baseScore = Number(settings?.baseScore) || 0;
   const levelScore = Number(settings?.levelScore) || 0;
   elements.settlementDisplay.textContent = `\u5927\u5c0f\uff1a${baseScore}+${levelScore}`;
+}
+
+function startCountdown(label, seconds, key) {
+  if (!elements.countdownDisplay) return;
+  if (gameState.countdownKey === key) return;
+
+  clearCountdown();
+  gameState.countdownKey = key;
+  let remaining = seconds;
+
+  const render = () => {
+    elements.countdownDisplay.classList.remove('hidden', 'urgent');
+    elements.countdownDisplay.textContent = `${label} ${remaining}s`;
+    elements.countdownDisplay.classList.toggle('urgent', remaining <= 5);
+  };
+
+  render();
+  gameState.countdownTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(gameState.countdownTimer);
+      gameState.countdownTimer = null;
+      elements.countdownDisplay.textContent = `${label} 0s`;
+      elements.countdownDisplay.classList.add('urgent');
+      return;
+    }
+    render();
+  }, 1000);
+}
+
+function clearCountdown() {
+  if (gameState.countdownTimer) {
+    clearInterval(gameState.countdownTimer);
+    gameState.countdownTimer = null;
+  }
+  gameState.countdownKey = null;
+  if (elements.countdownDisplay) {
+    elements.countdownDisplay.classList.add('hidden');
+    elements.countdownDisplay.classList.remove('urgent');
+  }
 }
 
 // 初始化
@@ -219,6 +268,7 @@ function connectSocket() {
 
   gameState.socket.on('room-update', (room) => {
     updateRoomDisplay(room);
+    syncUiForRoomState(room);
   });
 
   gameState.socket.on('deal-cards', (cards) => {
@@ -252,6 +302,7 @@ function connectSocket() {
     updateBidButtons(105); // 传入105让100分按钮可用
     // 显示叫分面板给当前叫分者
     updateCurrentBidder(data.currentBidder);
+    startCountdown('叫分', COUNTDOWN_SECONDS.bidding, `bidding:${data.currentBidder}:0`);
   });
 
   gameState.socket.on('bid-update', (data) => {
@@ -282,6 +333,7 @@ function connectSocket() {
   // 等待庄家叫主
   gameState.socket.on('waiting-trump', (data) => {
     showTableBottomDeck();
+    startCountdown('选主', COUNTDOWN_SECONDS.choosingTrump, `choosing:${data.dealer}`);
     if (data.dealer !== gameState.seat) {
       addChatMessage('系统', '等待庄家选择主牌...');
     }
@@ -300,6 +352,7 @@ function connectSocket() {
     elements.earlyFinishPanel.classList.add('hidden');
     elements.tableBottomDeck.classList.add('hidden');
     updateCurrentPlayer(data.currentPlayer);
+    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.currentPlayer}:0`);
 
     // 恢复出牌按钮的事件绑定
     configurePlayButton('play');
@@ -317,6 +370,7 @@ function connectSocket() {
     if (gameState.currentRound.length < 4) {
       gameState.currentPlayer = data.nextPlayer;
       updateCurrentPlayer(data.nextPlayer);
+      startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.nextPlayer}:${gameState.currentRound.length}`);
     }
   });
 
@@ -330,6 +384,7 @@ function connectSocket() {
   });
 
   gameState.socket.on('round-end', (data) => {
+    clearCountdown();
     gameState.currentRound = [];
     gameState.leadSuit = null;
     renderScoringCards(data.scoringCards || []);
@@ -339,6 +394,7 @@ function connectSocket() {
   gameState.socket.on('next-turn', (data) => {
     gameState.currentPlayer = data.currentPlayer;
     updateCurrentPlayer(data.currentPlayer);
+    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.currentPlayer}:${Date.now()}`);
   });
 
   gameState.socket.on('koudi', (data) => {
@@ -346,6 +402,7 @@ function connectSocket() {
   });
 
   gameState.socket.on('game-end', (data) => {
+    clearCountdown();
     showGameResult(data);
   });
 
@@ -491,6 +548,77 @@ function updateRoomDisplay(room) {
     playing: '游戏中'
   };
   elements.gameStatus.textContent = statusText[room.state] || '游戏中';
+}
+
+function syncUiForRoomState(room) {
+  gameState.currentBidder = room.currentBidder;
+  gameState.currentPlayer = room.currentPlayer;
+  gameState.trumpSuit = room.trumpSuit;
+  gameState.isNoTrump = room.isNoTrump;
+
+  elements.targetScore.textContent = room.dealerScore || room.currentBid || 100;
+  elements.bidPanel.classList.add('hidden');
+  elements.trumpPanel.classList.add('hidden');
+  elements.earlyFinishPanel.classList.add('hidden');
+
+  if (room.state === 'waiting') {
+    clearCountdown();
+    elements.readyBtn.classList.remove('hidden');
+    elements.playBtn.classList.add('hidden');
+    elements.bidHistory.classList.add('hidden');
+    elements.scorePanel.classList.add('hidden');
+    elements.trumpDisplay.classList.add('hidden');
+    elements.bottomCardsPanel.classList.add('hidden');
+    elements.tableBottomDeck.classList.add('hidden');
+    document.querySelectorAll('.player-seat').forEach(seat => seat.classList.remove('active'));
+    return;
+  }
+
+  elements.readyBtn.classList.add('hidden');
+
+  if (room.state === 'bidding') {
+    elements.bidHistory.classList.remove('hidden');
+    elements.scorePanel.classList.remove('hidden');
+    updateBidDisplay({
+      currentBid: room.currentBid || 100,
+      currentBidder: room.currentBidder,
+      bidHistory: room.bidHistory || [],
+      state: room.state,
+      dealer: room.dealer,
+      hasValidBid: !!room.hasValidBid
+    });
+    return;
+  }
+
+  if (room.state === 'exchanging') {
+    clearCountdown();
+    elements.bidHistory.classList.remove('hidden');
+    elements.scorePanel.classList.remove('hidden');
+    elements.tableBottomDeck.classList.remove('hidden');
+    return;
+  }
+
+  if (room.state === 'choosing-trump') {
+    elements.bidHistory.classList.remove('hidden');
+    elements.scorePanel.classList.remove('hidden');
+    startCountdown('选主', COUNTDOWN_SECONDS.choosingTrump, `choosing:${room.dealer}:${room.gameNumber}`);
+    if (room.dealer === gameState.seat) {
+      elements.trumpPanel.classList.remove('hidden');
+    }
+    return;
+  }
+
+  if (room.state === 'playing') {
+    elements.bidHistory.classList.add('hidden');
+    elements.scorePanel.classList.remove('hidden');
+    elements.tableBottomDeck.classList.add('hidden');
+    if (room.trumpSuit || room.isNoTrump) {
+      updateTrumpDisplay(room.trumpSuit, room.isNoTrump);
+    }
+    configurePlayButton('play');
+    updateCurrentPlayer(room.currentPlayer, { silent: true });
+    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${room.currentPlayer}:${room.gameNumber}:${room.currentRoundLength || 0}`);
+  }
 }
 
 function getSeatElement(seatIndex) {
@@ -969,6 +1097,7 @@ function updateBidDisplay(data) {
   // 检查是否轮到自己（只有在叫分阶段才显示叫分面板）
   if (data.state === 'bidding') {
     updateCurrentBidder(data.currentBidder);
+    startCountdown('叫分', COUNTDOWN_SECONDS.bidding, `bidding:${data.currentBidder}:${data.bidHistory.length}`);
   } else {
     // 其他阶段隐藏叫分面板
     elements.bidPanel.classList.add('hidden');
@@ -1045,6 +1174,7 @@ function sortClientHand(cards) {
 
 function showExchangePanel(payload) {
   if (gameState.exchangePanelShown) return;
+  clearCountdown();
 
   const bottomCards = Array.isArray(payload) ? payload : (payload.bottomCards || []);
   const mergedHand = Array.isArray(payload?.hand)
@@ -1245,7 +1375,7 @@ function createPlayedCardElement(card) {
   return cardEl;
 }
 
-function updateCurrentPlayer(playerIndex) {
+function updateCurrentPlayer(playerIndex, options = {}) {
   document.querySelectorAll('.player-seat').forEach(seat => {
     seat.classList.remove('active');
   });
@@ -1256,7 +1386,7 @@ function updateCurrentPlayer(playerIndex) {
     seatEl.classList.add('active');
   }
 
-  if (playerIndex === gameState.seat) {
+  if (!options.silent && playerIndex === gameState.seat) {
     addChatMessage('\u7cfb\u7edf', '\u8f6e\u5230\u4f60\u4e86\uff01');
   }
 }
@@ -1380,6 +1510,7 @@ function voteEndGame() {
 }
 
 function showAllPassLoser(data) {
+  clearCountdown();
   elements.resultModal.classList.remove('hidden');
   elements.resultTitle.textContent = '\u56db\u4eba\u90fd\u4e0d\u53eb';
   elements.resultContent.innerHTML = `

@@ -203,6 +203,53 @@ function attachSocketToPlayer(socket, room, player) {
   socket.sessionId = player.sessionId;
 }
 
+function sendPrivateState(socket, room, player) {
+  const playerIndex = room.players.findIndex(p => p.sessionId === player.sessionId);
+  socket.emit('room-update', getRoomState(room));
+
+  if (player.hand.length > 0) {
+    socket.emit('hand-sorted', player.hand);
+  }
+
+  if (room.state === 'bidding') {
+    socket.emit('bid-update', {
+      currentBid: room.currentBid,
+      currentBidder: room.currentBidder,
+      bidHistory: room.bidHistory,
+      state: room.state,
+      dealer: room.dealer,
+      hasValidBid: room.hasValidBid
+    });
+    return;
+  }
+
+  if (room.state === 'exchanging') {
+    if (playerIndex === room.dealer) {
+      socket.emit('exchange-cards', {
+        bottomCards: room.bottomCards,
+        hand: player.hand
+      });
+    }
+    return;
+  }
+
+  if (room.state === 'choosing-trump') {
+    if (playerIndex === room.dealer) {
+      socket.emit('choose-trump-request');
+    }
+    socket.emit('waiting-trump', { dealer: room.dealer });
+    return;
+  }
+
+  if (room.state === 'playing') {
+    socket.emit('game-start', {
+      currentPlayer: room.currentPlayer,
+      trumpSuit: room.trumpSuit,
+      isNoTrump: room.isNoTrump
+    });
+  }
+}
+
 // Socket.io连接处理
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
@@ -262,6 +309,7 @@ io.on('connection', (socket) => {
         attachSocketToPlayer(socket, room, existingPlayer);
         callback({ success: true, roomId, playerId: socket.id, sessionId: existingPlayer.sessionId, rejoined: true });
         io.to(room.id).emit('room-update', getRoomState(room));
+        sendPrivateState(socket, room, existingPlayer);
         return;
       }
     }
@@ -322,6 +370,7 @@ io.on('connection', (socket) => {
     attachSocketToPlayer(socket, room, player);
     callback({ success: true, roomId, playerId: socket.id, sessionId });
     io.to(room.id).emit('room-update', getRoomState(room));
+    sendPrivateState(socket, room, player);
   });
 
   socket.on('player-ready', (isReady) => {
@@ -481,6 +530,7 @@ io.on('connection', (socket) => {
 
     // 进入叫主阶段
     room.state = 'choosing-trump';
+    io.to(room.id).emit('room-update', getRoomState(room));
 
     // 通知庄家叫主
     io.to(dealer.id).emit('choose-trump-request');
@@ -562,6 +612,11 @@ io.on('connection', (socket) => {
           const currentIdx = currentRoom.players.findIndex(p => p.sessionId === player.sessionId && p.disconnected);
           if (currentIdx === -1) return;
 
+          if (currentRoom.state !== 'waiting') {
+            io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
+            return;
+          }
+
           currentRoom.players.splice(currentIdx, 1);
           currentRoom.players.forEach((p, seat) => { p.seat = seat; });
 
@@ -597,10 +652,14 @@ function getRoomState(room) {
     scoringCards: room.scoringCards,
     currentBid: room.currentBid,
     currentBidder: room.currentBidder,
+    bidHistory: room.bidHistory,
+    hasValidBid: room.hasValidBid,
+    dealerScore: room.dealerScore,
     dealer: room.dealer,
     trumpSuit: room.trumpSuit,
     isNoTrump: room.isNoTrump,
     currentPlayer: room.currentPlayer,
+    currentRoundLength: room.currentRound.length,
     gameNumber: room.gameNumber
   };
 }
@@ -702,6 +761,7 @@ function setDealer(room, dealerIndex, dealerScore) {
   dealer.hand = dealer.hand.concat(room.bottomCards);
   dealer.hand.sort((a, b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
 
+  io.to(room.id).emit('room-update', getRoomState(room));
   io.to(room.id).emit('bottom-to-dealer', { dealer: dealerIndex });
   io.to(dealer.id).emit('hand-sorted', dealer.hand);
   io.to(dealer.id).emit('exchange-cards', {
@@ -713,7 +773,10 @@ function setDealer(room, dealerIndex, dealerScore) {
 function startGame(room) {
   room.state = 'bidding';
   room.deck = shuffle(createDeck());
-  room.players.forEach(p => { p.isDealer = false; });
+  room.players.forEach(p => {
+    p.isDealer = false;
+    p.isReady = false;
+  });
   room.currentBid = 100;
   room.dealer = null;
   room.trumpSuit = null;
@@ -770,6 +833,9 @@ function startGame(room) {
 
   // 确定第一个叫分者
   room.currentBidder = (room.nextBidder || 0) % room.players.length;
+  room.currentPlayer = room.currentBidder;
+
+  io.to(room.id).emit('room-update', getRoomState(room));
 
   io.to(room.id).emit('game-started', {
     currentBidder: room.currentBidder,
@@ -1212,8 +1278,13 @@ function resetRoomForNextGame(room) {
   room.trumpSuit = null;
   room.isNoTrump = false;
   room.currentBidder = room.players.length ? (room.nextBidder || 0) % room.players.length : 0;
+  room.currentPlayer = room.currentBidder;
   room.currentRound = [];
   room.roundScores = [];
+  room.bottomCards = [];
+  room.deck = [];
+  room.roundWinner = null;
+  room.lastWinner = null;
   room.passedBidders = new Set();
   room.hasValidBid = false;
   room.earlyFinishVotes = new Set();

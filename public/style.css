@@ -1377,3 +1377,23 @@ body::before {
 
   .modal-content { width: calc(100vw - 20px); padding: 24px 18px; }
 }
+
+.countdown-display {
+  min-width: 72px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(96, 165, 216, 0.32);
+  color: #1f5f78;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(74, 136, 181, 0.14);
+}
+
+.countdown-display.urgent {
+  background: rgba(255, 237, 237, 0.96);
+  border-color: rgba(239, 68, 68, 0.38);
+  color: #dc2626;
+}
