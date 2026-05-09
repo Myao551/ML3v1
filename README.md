@@ -105,9 +105,6 @@ const PORT = process.env.PORT || 3000;
 
 Railway 和 Fly.io 也支持长连接服务，可以直接部署本项目的 Node.js 服务端。
 
-### Netlify / Vercel
-
-Netlify Functions 和 Vercel Serverless Functions 不适合直接承载这个 Socket.IO 长连接服务。如果要使用这些平台，建议只托管静态前端，并把实时后端部署到 Render、Railway、Fly.io 或其他支持 WebSocket 的平台。
 
 ## 项目结构
 
@@ -134,9 +131,6 @@ Netlify Functions 和 Vercel Serverless Functions 不适合直接承载这个 So
 
 ## 常见问题
 
-### 为什么不推荐直接部署到 Netlify 或 Vercel？
-
-这个游戏需要持续的 WebSocket 连接。Netlify/Vercel 的 Serverless Functions 更适合短请求，不适合直接运行当前这种常驻 Socket.IO 服务。
 
 ### 为什么 Render 上游戏房间会消失？
 

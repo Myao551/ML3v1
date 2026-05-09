@@ -152,6 +152,7 @@ function createRoom(roomId) {
     isNoTrump: false,
     currentPlayer: 0,
     currentRound: [],
+    roundResolving: false,
     roundWinner: null,
     scores: { team: 0 },
     scoringCards: [],
@@ -541,6 +542,10 @@ io.on('connection', (socket) => {
   socket.on('play-cards', (cards) => {
     const room = rooms.get(socket.roomId);
     if (!room || room.state !== 'playing') return;
+    if (room.roundResolving) {
+      socket.emit('invalid-play', '本轮正在结算，请稍候。');
+      return;
+    }
 
     if (room.players[room.currentPlayer].id !== socket.id) return;
 
@@ -565,18 +570,22 @@ io.on('connection', (socket) => {
       isDealer: player.isDealer
     };
     room.currentRound.push(play);
+    const isRoundComplete = room.currentRound.length === 4;
 
     // 通知所有玩家
     io.to(room.id).emit('cards-played', {
       player: room.currentPlayer,
       cards: cards,
-      nextPlayer: (room.currentPlayer + 1) % 4
+      nextPlayer: isRoundComplete ? null : (room.currentPlayer + 1) % 4
     });
 
-    room.currentPlayer = (room.currentPlayer + 1) % 4;
+    if (!isRoundComplete) {
+      room.currentPlayer = (room.currentPlayer + 1) % 4;
+    }
 
     // 一轮结束
-    if (room.currentRound.length === 4) {
+    if (isRoundComplete) {
+      room.roundResolving = true;
       setTimeout(() => finishRound(room), 1000);
     }
   });
@@ -782,6 +791,7 @@ function startGame(room) {
   room.trumpSuit = null;
   room.isNoTrump = false;
   room.currentRound = [];
+  room.roundResolving = false;
   room.roundScores = [];
   room.scores.team = 0;
   room.scoringCards = [];
@@ -1123,7 +1133,7 @@ function validatePlay(room, cards, playerIndex) {
     if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
       if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
           hasObligationTractor) {
-        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
+        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength === leadAnalysis.tractorLength
           ? { valid: true }
           : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
       }
@@ -1223,6 +1233,7 @@ function finishRound(room) {
   });
 
   room.currentRound = [];
+  room.roundResolving = false;
 
   if (isLastRound) {
     endGame(room);
@@ -1280,6 +1291,7 @@ function resetRoomForNextGame(room) {
   room.currentBidder = room.players.length ? (room.nextBidder || 0) % room.players.length : 0;
   room.currentPlayer = room.currentBidder;
   room.currentRound = [];
+  room.roundResolving = false;
   room.roundScores = [];
   room.bottomCards = [];
   room.deck = [];
