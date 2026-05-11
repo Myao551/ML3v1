@@ -1,8 +1,20 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const { UserStore } = require('./auth-store');
+const {
+  getAuthUserFromSocket,
+  registerAuthRoutes
+} = require('./src/http/auth-routes');
+const {
+  createDeck,
+  getCardScore,
+  getCardValue,
+  shuffle
+} = require('./src/game/cards');
+const { registerGameplayEvents } = require('./src/socket/gameplay-events');
+const { registerRoomLifecycleEvents } = require('./src/socket/room-events');
 
 const app = express();
 const server = http.createServer(app);
@@ -13,635 +25,49 @@ const io = socketIo(server, {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+const userStore = new UserStore();
 
-// 游戏房间存储
+app.disable('x-powered-by');
+app.use(express.json({ limit: '16kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+registerAuthRoutes(app, userStore);
+
+// 娓告垙鎴块棿瀛樺偍
 const rooms = new Map();
 
-// 扑克牌定义
-const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
-const RANKS = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-const TRUMP_RANKS = ['2', '7'];
-const JOKERS = [{ suit: 'joker', rank: 'big', name: '大王' }, { suit: 'joker', rank: 'small', name: '小王' }];
-
-// 创建两副牌（108张，不去掉3和4）
-function createDeck() {
-  const deck = [];
-  // 两副普通牌
-  for (let d = 0; d < 2; d++) {
-    for (const suit of SUITS) {
-      for (const rank of RANKS) {
-        deck.push({ suit, rank, id: `${suit}-${rank}-${d}`, deck: d });
-      }
-      // 加入2和7作为常主
-      for (const rank of TRUMP_RANKS) {
-        deck.push({ suit, rank, id: `${suit}-${rank}-${d}`, deck: d, isTrump: true });
-      }
-    }
-    // 加入大小王
-    deck.push({ ...JOKERS[0], id: `big-joker-${d}`, deck: d, isTrump: true });
-    deck.push({ ...JOKERS[1], id: `small-joker-${d}`, deck: d, isTrump: true });
-  }
-  return deck;
-}
-
-// 洗牌
-function shuffle(deck) {
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  return deck;
-}
-
-// 计算牌的分值
-function getCardScore(card) {
-  if (card.rank === '5') return 5;
-  if (card.rank === '10' || card.rank === 'K') return 10;
-  return 0;
-}
-
-// 获取手牌显示排序值（越大越靠前）
-// 顺序：大王 > 小王 > 主7 > 副7 > 主2 > 副2 > 主A > 主K > ... > 主3 > 其他花色
-function getCardDisplayValue(card, trumpSuit, isNoTrump) {
-  // 大王
-  if (card.rank === 'big') return 1000;
-  // 小王
-  if (card.rank === 'small') return 999;
-  // 主7
-  if (card.rank === '7' && !isNoTrump && card.suit === trumpSuit) return 998;
-  // 副7
-  if (card.rank === '7') return 997;
-  // 主2
-  if (card.rank === '2' && !isNoTrump && card.suit === trumpSuit) return 996;
-  // 副2
-  if (card.rank === '2') return 995;
-
-  // 主牌花色（非2、非7）
-  if (!isNoTrump && card.suit === trumpSuit) {
-    const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-    return 500 + (rankValue[card.rank] || 0);
-  }
-
-  // 其他副牌
-  const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-  const suitOrder = { 'spades': 4, 'hearts': 3, 'diamonds': 2, 'clubs': 1 };
-  return suitOrder[card.suit] * 20 + (rankValue[card.rank] || 0);
-}
-
-// 手牌显示排序 - 主牌优先，副牌红黑相间
-function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
-  // 首先按显示值排序（主牌在前）
-  const aValue = getCardDisplayValue(a, trumpSuit, isNoTrump);
-  const bValue = getCardDisplayValue(b, trumpSuit, isNoTrump);
-
-  // 如果都在副牌区域（<500），按红黑相间排序
-  if (aValue < 500 && bValue < 500) {
-    const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 }; // 黑桃(黑)、红桃(红)、梅花(黑)、方片(红)
-    if (a.suit !== b.suit) {
-      return suitOrder[b.suit] - suitOrder[a.suit];
-    }
-    // 同花色按大小
-    const rankOrder = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
-    return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
-  }
-
-  return bValue - aValue;
-}
-
-// 获取牌的大小（用于比较）
-function getCardValue(card, trumpSuit, isNoTrump) {
-  const suitOrder = { 'spades': 3, 'hearts': 2, 'diamonds': 1, 'clubs': 0 };
-
-  // 大王
-  if (card.rank === 'big') return 1000;
-  // 小王
-  if (card.rank === 'small') return 999;
-  // 主7
-  if (card.rank === '7' && card.suit === trumpSuit && !isNoTrump) return 998;
-  // 副7
-  if (card.rank === '7') return 200 + suitOrder[card.suit];
-  // 主2
-  if (card.rank === '2' && card.suit === trumpSuit && !isNoTrump) return 197;
-  // 副2
-  if (card.rank === '2') return 100 + suitOrder[card.suit];
-
-  // 主牌其他
-  if (card.suit === trumpSuit && !isNoTrump) {
-    const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
-    return 50 + rankValue[card.rank];
-  }
-
-  // 副牌
-  const rankValue = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
-  return rankValue[card.rank];
-}
-
-// 创建新房间
-function createRoom(roomId) {
-  return {
-    id: roomId,
-    players: [],
-    state: 'waiting', // waiting, bidding, playing, ended
-    deck: [],
-    bottomCards: [],
-    currentBidder: 0,
-    currentBid: 100,
-    dealer: null,
-    trumpSuit: null,
-    isNoTrump: false,
-    currentPlayer: 0,
-    currentRound: [],
-    roundResolving: false,
-    roundWinner: null,
-    scores: { team: 0 },
-    scoringCards: [],
-    dealerScore: 0,
-    settlementSettings: { baseScore: 1, levelScore: 1 },
-    roundScores: [],
-    bidHistory: [],
-    passedBidders: new Set(),
-    hasValidBid: false,
-    earlyFinishVotes: new Set(),
-    earlyFinishOffered: false,
-    gameNumber: 1,
-    lastWinner: null,
-    nextBidder: 0
-  };
-}
-
-function normalizePlayerPayload(payload) {
-  if (typeof payload === 'string') {
-    return { name: payload.trim(), sessionId: null };
-  }
-
-  return {
-    name: String(payload?.name || '').trim(),
-    sessionId: payload?.sessionId || null
-  };
-}
-
-function normalizeSettlementSettings(settings) {
-  const baseScore = Number(settings?.baseScore);
-  const levelScore = Number(settings?.levelScore);
-  return {
-    baseScore: Number.isFinite(baseScore) && baseScore >= 0 ? Math.floor(baseScore) : 1,
-    levelScore: Number.isFinite(levelScore) && levelScore >= 0 ? Math.floor(levelScore) : 1
-  };
-}
-
-function attachSocketToPlayer(socket, room, player) {
-  if (player.disconnectTimer) {
-    clearTimeout(player.disconnectTimer);
-    player.disconnectTimer = null;
-  }
-
-  player.id = socket.id;
-  player.disconnected = false;
-  socket.join(room.id);
-  socket.roomId = room.id;
-  socket.playerId = socket.id;
-  socket.sessionId = player.sessionId;
-}
-
-function sendPrivateState(socket, room, player) {
-  const playerIndex = room.players.findIndex(p => p.sessionId === player.sessionId);
-  socket.emit('room-update', getRoomState(room));
-
-  if (player.hand.length > 0) {
-    socket.emit('hand-sorted', player.hand);
-  }
-
-  if (room.state === 'bidding') {
-    socket.emit('bid-update', {
-      currentBid: room.currentBid,
-      currentBidder: room.currentBidder,
-      bidHistory: room.bidHistory,
-      state: room.state,
-      dealer: room.dealer,
-      hasValidBid: room.hasValidBid
-    });
-    return;
-  }
-
-  if (room.state === 'exchanging') {
-    if (playerIndex === room.dealer) {
-      socket.emit('exchange-cards', {
-        bottomCards: room.bottomCards,
-        hand: player.hand
-      });
-    }
-    return;
-  }
-
-  if (room.state === 'choosing-trump') {
-    if (playerIndex === room.dealer) {
-      socket.emit('choose-trump-request');
-    }
-    socket.emit('waiting-trump', { dealer: room.dealer });
-    return;
-  }
-
-  if (room.state === 'playing') {
-    socket.emit('game-start', {
-      currentPlayer: room.currentPlayer,
-      trumpSuit: room.trumpSuit,
-      isNoTrump: room.isNoTrump
-    });
-  }
-}
-
-// Socket.io连接处理
+// Socket.io杩炴帴澶勭悊
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
+  socket.authUser = getAuthUserFromSocket(userStore, socket);
 
-  // 创建房间
-  socket.on('create-room', (playerPayload, callback) => {
-    const { name: playerName, sessionId } = normalizePlayerPayload(playerPayload);
-    if (!playerName) {
-      callback({ success: false, error: '请输入昵称' });
-      return;
-    }
-
-    const roomId = uuidv4().slice(0, 8);
-    const room = createRoom(roomId);
-    room.settlementSettings = normalizeSettlementSettings(playerPayload?.settlementSettings);
-
-    const player = {
-      id: socket.id,
-      sessionId: sessionId || uuidv4(),
-      name: playerName,
-      seat: 0,
-      hand: [],
-      isReady: false,
-      isDealer: false,
-      settlementScore: 0,
-      disconnected: false,
-      disconnectTimer: null
-    };
-
-    room.players.push(player);
-    rooms.set(roomId, room);
-    attachSocketToPlayer(socket, room, player);
-
-    callback({ success: true, roomId, playerId: socket.id, sessionId: player.sessionId });
-    io.to(roomId).emit('room-update', getRoomState(room));
+  // 鍒涘缓鎴块棿
+  registerRoomLifecycleEvents({
+    io,
+    socket,
+    rooms,
+    userStore,
+    getRoomState,
+    startGame
   });
 
-  // 加入房间
-  socket.on('join-room', (roomId, playerPayload, callback) => {
-    const { name: playerName, sessionId } = normalizePlayerPayload(playerPayload);
-    const room = rooms.get(roomId);
-
-    if (!room) {
-      callback({ success: false, error: '房间不存在' });
-      return;
-    }
-
-    if (!playerName) {
-      callback({ success: false, error: '请输入昵称' });
-      return;
-    }
-
-    if (sessionId) {
-      const existingPlayer = room.players.find(p => p.sessionId === sessionId);
-      if (existingPlayer) {
-        existingPlayer.name = playerName;
-        attachSocketToPlayer(socket, room, existingPlayer);
-        callback({ success: true, roomId, playerId: socket.id, sessionId: existingPlayer.sessionId, rejoined: true });
-        io.to(room.id).emit('room-update', getRoomState(room));
-        sendPrivateState(socket, room, existingPlayer);
-        return;
-      }
-    }
-
-    const duplicateName = room.players.some(p => p.name.trim().toLowerCase() === playerName.toLowerCase());
-    if (duplicateName) {
-      callback({ success: false, error: '该昵称已在房间中，请直接回到原页面或更换昵称' });
-      return;
-    }
-
-    if (room.players.length >= 4) {
-      callback({ success: false, error: '房间已满' });
-      return;
-    }
-
-    if (room.state !== 'waiting') {
-      callback({ success: false, error: '游戏已开始' });
-      return;
-    }
-
-    const player = {
-      id: socket.id,
-      sessionId: sessionId || uuidv4(),
-      name: playerName,
-      seat: room.players.length,
-      hand: [],
-      isReady: false,
-      isDealer: false,
-      settlementScore: 0,
-      disconnected: false,
-      disconnectTimer: null
-    };
-
-    room.players.push(player);
-    attachSocketToPlayer(socket, room, player);
-
-    callback({ success: true, roomId, playerId: socket.id, sessionId: player.sessionId });
-    io.to(roomId).emit('room-update', getRoomState(room));
+  registerGameplayEvents({
+    io,
+    socket,
+    rooms,
+    getRoomState,
+    emitBidUpdate,
+    getActiveBidders,
+    getNextBidder,
+    handleAllPass,
+    setDealer,
+    endGame,
+    isValidBid,
+    validatePlay,
+    finishRound
   });
 
-  // 玩家准备
-  socket.on('rejoin-room', (data, callback = () => {}) => {
-    const roomId = data?.roomId;
-    const sessionId = data?.sessionId;
-    const room = rooms.get(roomId);
-
-    if (!room || !sessionId) {
-      callback({ success: false });
-      return;
-    }
-
-    const player = room.players.find(p => p.sessionId === sessionId);
-    if (!player) {
-      callback({ success: false });
-      return;
-    }
-
-    attachSocketToPlayer(socket, room, player);
-    callback({ success: true, roomId, playerId: socket.id, sessionId });
-    io.to(room.id).emit('room-update', getRoomState(room));
-    sendPrivateState(socket, room, player);
-  });
-
-  socket.on('player-ready', (isReady) => {
-    const room = rooms.get(socket.roomId);
-    if (!room) return;
-
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) {
-      player.isReady = isReady;
-      io.to(room.id).emit('room-update', getRoomState(room));
-
-      // 检查是否所有玩家都准备好
-      if (room.players.length === 4 && room.players.every(p => p.isReady)) {
-        startGame(room);
-      }
-    }
-  });
-
-  // 叫分
-  socket.on('place-bid', (bid) => {
-    const room = rooms.get(socket.roomId);
-    if (!room || room.state !== 'bidding') return;
-
-    const currentPlayer = room.players[room.currentBidder];
-    if (currentPlayer.id !== socket.id) return;
-
-    if (room.passedBidders.has(room.currentBidder)) {
-      room.currentBidder = getNextBidder(room);
-      emitBidUpdate(room);
-      return;
-    }
-
-    if (bid === 'pass') {
-      if (room.passedBidders.has(room.currentBidder)) return;
-      room.passedBidders.add(room.currentBidder);
-      room.bidHistory.push({ player: currentPlayer.name, bid: 'pass' });
-      room.currentBidder = getNextBidder(room);
-
-      // 检查是否只剩一个人没pass
-      const activeBidders = getActiveBidders(room);
-
-      if (activeBidders.length === 0) {
-        handleAllPass(room);
-        return;
-      }
-
-      if (activeBidders.length === 1 && room.hasValidBid) {
-        // 确定庄家
-        setDealer(room, activeBidders[0], room.currentBid);
-        return;
-
-        // 底牌加入庄家手牌，让庄家选8张作为新底牌
-      }
-    } else {
-      if (!isValidBid(room, bid)) {
-        socket.emit('invalid-bid', '无效的叫分');
-        return;
-      }
-
-      room.currentBid = bid;
-      room.hasValidBid = true;
-      room.bidHistory.push({ player: currentPlayer.name, bid });
-      room.currentBidder = getNextBidder(room);
-
-      // 叫到75直接成为庄家
-      if (bid === 75) {
-        setDealer(room, room.players.findIndex(p => p.id === currentPlayer.id), 75);
-        return;
-        // 底牌加入庄家手牌，让庄家选8张作为新底牌
-      }
-    }
-
-    emitBidUpdate(room);
-  });
-
-  socket.on('vote-end-game', () => {
-    const room = rooms.get(socket.roomId);
-    if (!room || room.state !== 'playing' || room.scores.team < room.dealerScore) return;
-
-    const voterIndex = room.players.findIndex(p => p.id === socket.id);
-    if (voterIndex === -1) return;
-
-    room.earlyFinishVotes.add(voterIndex);
-    io.to(room.id).emit('early-finish-vote-update', {
-      votes: room.earlyFinishVotes.size,
-      total: room.players.length,
-      voters: [...room.earlyFinishVotes]
-    });
-
-    if (room.earlyFinishVotes.size === room.players.length) {
-      endGame(room, 'early');
-    }
-  });
-
-  // 选择主牌
-  socket.on('choose-trump', (suit, isNoTrump) => {
-    const room = rooms.get(socket.roomId);
-    if (!room || room.state !== 'choosing-trump') return;
-
-    const dealer = room.players[room.dealer];
-    if (dealer.id !== socket.id) return;
-
-    room.trumpSuit = suit;
-    room.isNoTrump = isNoTrump;
-    room.state = 'playing';
-    room.currentPlayer = room.dealer;
-
-    // 重新排序所有玩家的手牌（主牌优先，同花色，牌大小）
-    for (const player of room.players) {
-      player.hand.sort((a, b) => sortCardsForDisplay(a, b, suit, isNoTrump));
-      // 发送排序后的手牌给玩家
-      io.to(player.id).emit('hand-sorted', player.hand);
-    }
-
-    // 通知所有玩家主牌和游戏开始
-    io.to(room.id).emit('trump-chosen', {
-      trumpSuit: suit,
-      isNoTrump: isNoTrump,
-      dealer: room.dealer
-    });
-
-    // 开始游戏
-    io.to(room.id).emit('game-start', {
-      currentPlayer: room.currentPlayer,
-      trumpSuit: room.trumpSuit,
-      isNoTrump: room.isNoTrump
-    });
-  });
-
-  // 完成底牌选择
-  socket.on('finish-exchange', (newBottomCards) => {
-    const room = rooms.get(socket.roomId);
-    if (!room || room.state !== 'exchanging') return;
-
-    const dealer = room.players[room.dealer];
-    if (dealer.id !== socket.id) return;
-
-    // 设置新底牌
-    if (!Array.isArray(newBottomCards) || newBottomCards.length !== 8) {
-      socket.emit('invalid-play', '请选择8张底牌');
-      return;
-    }
-
-    const selectedIds = new Set();
-    for (const card of newBottomCards) {
-      if (!card || selectedIds.has(card.id) || !dealer.hand.some(c => c.id === card.id)) {
-        socket.emit('invalid-play', '底牌选择无效');
-        return;
-      }
-      selectedIds.add(card.id);
-    }
-
-    room.bottomCards = newBottomCards;
-    dealer.hand = dealer.hand.filter(card => !selectedIds.has(card.id));
-    dealer.hand.sort((a, b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
-    io.to(dealer.id).emit('hand-sorted', dealer.hand);
-
-    // 进入叫主阶段
-    room.state = 'choosing-trump';
-    io.to(room.id).emit('room-update', getRoomState(room));
-
-    // 通知庄家叫主
-    io.to(dealer.id).emit('choose-trump-request');
-    io.to(room.id).emit('waiting-trump', { dealer: room.dealer });
-  });
-
-  // 出牌
-  socket.on('play-cards', (cards) => {
-    const room = rooms.get(socket.roomId);
-    if (!room || room.state !== 'playing') return;
-    if (room.roundResolving) {
-      socket.emit('invalid-play', '本轮正在结算，请稍候。');
-      return;
-    }
-
-    if (room.players[room.currentPlayer].id !== socket.id) return;
-
-    // 验证牌型合法性
-    const validation = validatePlay(room, cards, room.currentPlayer);
-    if (!validation.valid) {
-      socket.emit('invalid-play', validation.message);
-      return;
-    }
-
-    // 从玩家手牌中移除
-    const player = room.players[room.currentPlayer];
-    for (const card of cards) {
-      const idx = player.hand.findIndex(c => c.id === card.id);
-      if (idx !== -1) player.hand.splice(idx, 1);
-    }
-
-    // 记录出牌
-    const play = {
-      player: room.currentPlayer,
-      cards: cards,
-      isDealer: player.isDealer
-    };
-    room.currentRound.push(play);
-    const isRoundComplete = room.currentRound.length === 4;
-
-    // 通知所有玩家
-    io.to(room.id).emit('cards-played', {
-      player: room.currentPlayer,
-      cards: cards,
-      nextPlayer: isRoundComplete ? null : (room.currentPlayer + 1) % 4
-    });
-
-    if (!isRoundComplete) {
-      room.currentPlayer = (room.currentPlayer + 1) % 4;
-    }
-
-    // 一轮结束
-    if (isRoundComplete) {
-      room.roundResolving = true;
-      setTimeout(() => finishRound(room), 1000);
-    }
-  });
-
-  // 聊天消息
-  socket.on('chat-message', (message) => {
-    const room = rooms.get(socket.roomId);
-    if (!room) return;
-
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) {
-      io.to(room.id).emit('chat-message', {
-        player: player.name,
-        message: message
-      });
-    }
-  });
-
-  // 断开连接
-  socket.on('disconnect', () => {
-    const room = rooms.get(socket.roomId);
-    if (room) {
-      const idx = room.players.findIndex(p => p.id === socket.id);
-      if (idx !== -1) {
-        const player = room.players[idx];
-        player.disconnected = true;
-        io.to(room.id).emit('room-update', getRoomState(room));
-
-        player.disconnectTimer = setTimeout(() => {
-          const currentRoom = rooms.get(room.id);
-          if (!currentRoom) return;
-
-          const currentIdx = currentRoom.players.findIndex(p => p.sessionId === player.sessionId && p.disconnected);
-          if (currentIdx === -1) return;
-
-          if (currentRoom.state !== 'waiting') {
-            io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
-            return;
-          }
-
-          currentRoom.players.splice(currentIdx, 1);
-          currentRoom.players.forEach((p, seat) => { p.seat = seat; });
-
-          if (currentRoom.players.length === 0) {
-            rooms.delete(room.id);
-          } else {
-            io.to(currentRoom.id).emit('player-left', { playerId: socket.id });
-            io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
-          }
-        }, 60000);
-      }
-    }
-  });
 });
 
-// 获取房间状态（隐藏敏感信息）
 function getRoomState(room) {
   return {
     id: room.id,
@@ -673,7 +99,7 @@ function getRoomState(room) {
   };
 }
 
-// 开始游戏
+// 寮€濮嬫父鎴?
 function emitBidUpdate(room) {
   io.to(room.id).emit('bid-update', {
     currentBid: room.currentBid,
@@ -802,7 +228,7 @@ function startGame(room) {
   room.earlyFinishVotes = new Set();
   room.earlyFinishOffered = false;
 
-  // 发牌：每人25张，8张底牌 (共108张)
+  // 鍙戠墝锛氭瘡浜?5寮狅紝8寮犲簳鐗?(鍏?08寮?
   room.bottomCards = room.deck.slice(0, 8);
   let cardIndex = 8;
 
@@ -810,19 +236,19 @@ function startGame(room) {
     room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
     cardIndex += 25;
 
-    // 初始排序（无主时）：常主(2、7、王)优先，副牌红黑相间
+    // 鍒濆鎺掑簭锛堟棤涓绘椂锛夛細甯镐富(2銆?銆佺帇)浼樺厛锛屽壇鐗岀孩榛戠浉闂?
     room.players[i].hand.sort((a, b) => {
       const rankOrder = { 'big': 100, 'small': 99, '2': 98, '7': 97, 'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
-      // 红黑相间：黑桃(黑)、红桃(红)、梅花(黑)、方片(红) -> 但按黑红顺序排列
+      // 绾㈤粦鐩搁棿锛氶粦妗?榛?銆佺孩妗?绾?銆佹鑺?榛?銆佹柟鐗?绾? -> 浣嗘寜榛戠孩椤哄簭鎺掑垪
       const suitOrder = { 'spades': 4, 'hearts': 3, 'clubs': 2, 'diamonds': 1 };
 
-      // 大王、小王最前
+      // 澶х帇銆佸皬鐜嬫渶鍓?
       if (a.rank === 'big') return -1;
       if (b.rank === 'big') return 1;
       if (a.rank === 'small') return -1;
       if (b.rank === 'small') return 1;
 
-      // 然后是7和2（常主）
+      // 鐒跺悗鏄?鍜?锛堝父涓伙級
       const aIsConstantTrump = a.rank === '7' || a.rank === '2';
       const bIsConstantTrump = b.rank === '7' || b.rank === '2';
       if (aIsConstantTrump && !bIsConstantTrump) return -1;
@@ -832,16 +258,16 @@ function startGame(room) {
         return suitOrder[b.suit] - suitOrder[a.suit];
       }
 
-      // 副牌：红黑相间排列（黑桃、红桃、梅花、方片），同花色内按大小
+      // 鍓墝锛氱孩榛戠浉闂存帓鍒楋紙榛戞銆佺孩妗冦€佹鑺便€佹柟鐗囷級锛屽悓鑺辫壊鍐呮寜澶у皬
       if (a.suit !== b.suit) return suitOrder[b.suit] - suitOrder[a.suit];
       return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
     });
 
-    // 发送手牌给玩家
+    // 鍙戦€佹墜鐗岀粰鐜╁
     io.to(room.players[i].id).emit('deal-cards', room.players[i].hand);
   }
 
-  // 确定第一个叫分者
+  // 纭畾绗竴涓彨鍒嗚€?
   room.currentBidder = (room.nextBidder || 0) % room.players.length;
   room.currentPlayer = room.currentBidder;
 
@@ -856,8 +282,8 @@ function startGame(room) {
   });
 }
 
-// 验证出牌合法性
-// 判断是否为当前主牌（包括常主和主花色）
+// 楠岃瘉鍑虹墝鍚堟硶鎬?
+// 鍒ゆ柇鏄惁涓哄綋鍓嶄富鐗岋紙鍖呮嫭甯镐富鍜屼富鑺辫壊锛?
 function isTrumpCard(card, trumpSuit, isNoTrump) {
   if (card.suit === 'joker') return true;
   if (card.rank === '2' || card.rank === '7') return true;
@@ -1080,13 +506,13 @@ function validatePlay(room, cards, playerIndex) {
   const player = room.players[playerIndex];
 
   if (!Array.isArray(cards) || cards.length === 0) {
-    return { valid: false, message: '请选择要出的牌。' };
+    return { valid: false, message: '请选择要出的牌' };
   }
 
   const selectedIds = new Set();
   for (const card of cards) {
     if (!card || selectedIds.has(card.id) || !player.hand.some(c => c.id === card.id)) {
-      return { valid: false, message: '所选牌无效或不在当前手牌中。' };
+      return { valid: false, message: '所选牌无效或不在手牌中' };
     }
     selectedIds.add(card.id);
   }
@@ -1094,13 +520,13 @@ function validatePlay(room, cards, playerIndex) {
   if (room.currentRound.length === 0) {
     return analyzePlay(cards, room.trumpSuit, room.isNoTrump).valid
       ? { valid: true }
-      : { valid: false, message: '首家出牌必须是同一有效花色的合法牌型。' };
+      : { valid: false, message: '出牌组合无效' };
   }
 
   const firstPlay = room.currentRound[0];
   const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
   if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) {
-    return { valid: false, message: `本轮必须出 ${firstPlay.cards.length} 张牌。` };
+    return { valid: false, message: `本轮需要出 ${firstPlay.cards.length} 张牌` };
   }
 
   const leadFollowSuit = getFollowSuitKey(firstPlay.cards, room.trumpSuit, room.isNoTrump);
@@ -1108,7 +534,7 @@ function validatePlay(room, cards, playerIndex) {
   const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
   const playedLeadSuitCount = countFollowSuit(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
   if (playedLeadSuitCount < requiredFollowCount) {
-    return { valid: false, message: '有首家花色时必须优先跟足。' };
+    return { valid: false, message: '有同花色时必须跟牌' };
   }
 
   const playedLeadSuitCards = getFollowSuitCards(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
@@ -1135,13 +561,13 @@ function validatePlay(room, cards, playerIndex) {
           hasObligationTractor) {
         return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength === leadAnalysis.tractorLength
           ? { valid: true }
-          : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
+          : { valid: false, message: '必须用同花色拖拉机跟牌' };
       }
       if (obligationSuitInHand >= 2 &&
           hasObligationPair) {
         return structureAnalysis.valid && structureAnalysis.pairCount > 0
           ? { valid: true }
-          : { valid: false, message: '你没有拖拉机但有对子时，必须优先跟对子。' };
+          : { valid: false, message: '必须用同花色对子跟牌' };
       }
     }
 
@@ -1150,7 +576,7 @@ function validatePlay(room, cards, playerIndex) {
         hasObligationPair) {
       return structureAnalysis.valid && structureAnalysis.pairCount > 0
         ? { valid: true }
-        : { valid: false, message: '你有对子时必须跟对子。' };
+        : { valid: false, message: '必须跟对子' };
     }
   }
 
@@ -1177,7 +603,7 @@ function finishRound(room) {
   const winnerPlayer = room.currentRound[winner].player;
   const winnerIsDealer = room.players[winnerPlayer].isDealer;
 
-  // 闲家得分
+  // 闂插寰楀垎
   if (!winnerIsDealer) {
     room.scores.team += roundScore;
     const scoreCards = room.currentRound.flatMap(play => play.cards).filter(card => getCardScore(card) > 0);
@@ -1190,12 +616,12 @@ function finishRound(room) {
     isDealerWin: winnerIsDealer
   });
 
-  // 检查是否是最后一轮（抠底）
+  // 妫€鏌ユ槸鍚︽槸鏈€鍚庝竴杞紙鎶犲簳锛?
   const isLastRound = room.players.every(p => p.hand.length === 0);
   const winnerAnalysis = analyzePlay(room.currentRound[winner].cards, room.trumpSuit, room.isNoTrump);
 
   if (isLastRound && !winnerIsDealer && winnerAnalysis.suit === 'trump') {
-    // 抠底
+    // 鎶犲簳
     let multiplier = getBottomMultiplier(winnerAnalysis);
     const bottomScore = room.bottomCards.reduce((sum, c) => sum + getCardScore(c), 0) * multiplier;
     room.scores.team += bottomScore;
@@ -1243,7 +669,7 @@ function finishRound(room) {
   }
 }
 
-// 结束游戏
+// 缁撴潫娓告垙
 function endGame(room, reason = 'normal') {
   room.state = 'ended';
   const finalScore = room.scores.team;
