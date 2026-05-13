@@ -84,7 +84,7 @@ function registerGameplayEvents({
       }
     } else {
       if (!isValidBid(room, bid)) {
-        socket.emit('invalid-bid', 'Invalid bid');
+        socket.emit('invalid-bid', '叫分无效');
         return;
       }
 
@@ -163,14 +163,14 @@ function registerGameplayEvents({
     if (dealer.id !== socket.id) return;
 
     if (!Array.isArray(newBottomCards) || newBottomCards.length !== 8) {
-      socket.emit('invalid-play', 'Please select 8 bottom cards');
+      socket.emit('invalid-play', '请选择 8 张底牌');
       return;
     }
 
     const selectedIds = new Set();
     for (const card of newBottomCards) {
       if (!card || selectedIds.has(card.id) || !dealer.hand.some((/** @type {any} */ candidate) => candidate.id === card.id)) {
-        socket.emit('invalid-play', 'Invalid bottom card selection');
+        socket.emit('invalid-play', '底牌选择无效');
         return;
       }
       selectedIds.add(card.id);
@@ -192,7 +192,7 @@ function registerGameplayEvents({
     if (!room || room.state !== 'playing') return;
 
     if (room.roundResolving) {
-      socket.emit('invalid-play', 'Round is resolving. Please wait.');
+      socket.emit('invalid-play', '本轮正在结算，请稍候');
       return;
     }
 

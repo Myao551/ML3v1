@@ -104,6 +104,35 @@ function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
 }
 
 /**
+ * @param {Card} a
+ * @param {Card} b
+ * @returns {number}
+ */
+function sortCardsForInitialDeal(a, b) {
+  /** @type {ValueMap} */
+  const rankOrder = { big: 100, small: 99, 2: 98, 7: 97, A: 14, K: 13, Q: 12, J: 11, 10: 10, 9: 9, 8: 8, 6: 6, 5: 5, 4: 4, 3: 3 };
+  /** @type {ValueMap} */
+  const suitOrder = { spades: 4, hearts: 3, clubs: 2, diamonds: 1 };
+
+  if (a.rank === 'big') return -1;
+  if (b.rank === 'big') return 1;
+  if (a.rank === 'small') return -1;
+  if (b.rank === 'small') return 1;
+
+  const aIsConstantTrump = a.rank === '7' || a.rank === '2';
+  const bIsConstantTrump = b.rank === '7' || b.rank === '2';
+  if (aIsConstantTrump && !bIsConstantTrump) return -1;
+  if (!aIsConstantTrump && bIsConstantTrump) return 1;
+  if (aIsConstantTrump && bIsConstantTrump) {
+    if (a.rank !== b.rank) return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+    return (suitOrder[b.suit] || 0) - (suitOrder[a.suit] || 0);
+  }
+
+  if (a.suit !== b.suit) return (suitOrder[b.suit] || 0) - (suitOrder[a.suit] || 0);
+  return (rankOrder[b.rank] || 0) - (rankOrder[a.rank] || 0);
+}
+
+/**
  * @param {Card} card
  * @param {string | null} trumpSuit
  * @param {boolean} isNoTrump
@@ -135,5 +164,6 @@ module.exports = {
   getCardValue,
   getCardDisplayValue,
   shuffle,
+  sortCardsForInitialDeal,
   sortCardsForDisplay
 };
