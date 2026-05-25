@@ -83,8 +83,7 @@ body::before {
 /* ═══════════════════════════════════════════════════
    HOME SCREEN
 ═══════════════════════════════════════════════════ */
-#home-screen,
-.auth-screen {
+#home-screen {
   background:
     radial-gradient(ellipse 80% 60% at 30% 20%, rgba(201,162,39,.08) 0%, transparent 60%),
     radial-gradient(ellipse 60% 80% at 80% 80%, rgba(27,67,50,.4) 0%, transparent 55%),
@@ -221,22 +220,6 @@ body::before {
 
 .input-group input::placeholder { color: rgba(122,143,168,.5); }
 
-.auth-container {
-  width: min(380px, calc(100vw - 32px));
-}
-
-.standalone-auth-form {
-  margin-bottom: 14px;
-}
-
-.standalone-auth-form .btn {
-  width: 100%;
-}
-
-.auth-switch {
-  text-align: center;
-}
-
 .link-button {
   border: 0;
   background: transparent;
@@ -251,47 +234,6 @@ body::before {
   color: var(--ivory);
   text-decoration: underline;
   outline: none;
-}
-
-.signed-in-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  background: rgba(0,0,0,.28);
-  border: 1px solid rgba(201,162,39,.14);
-  border-radius: var(--r-md);
-}
-
-.auth-status {
-  min-height: 18px;
-  font-size: 13px;
-  color: var(--gold-light);
-  text-align: center;
-}
-
-.auth-form {
-  display: grid;
-  gap: 10px;
-}
-
-.auth-form input {
-  width: 100%;
-  padding: 12px 14px;
-  font-family: var(--font-serif);
-  font-size: 14px;
-  background: rgba(0,0,0,.45);
-  border: 1px solid rgba(201,162,39,.22);
-  border-radius: var(--r-sm);
-  color: var(--ivory);
-  outline: none;
-}
-
-.auth-form input:focus {
-  border-color: var(--gold);
-  box-shadow: 0 0 0 3px rgba(201,162,39,.12);
 }
 
 /* Settlement Settings */

@@ -1,9 +1,6 @@
 // 游戏状态
-import { createAuthUi } from './modules/auth-ui.js';
-
 const gameState = {
   socket: null,
-  authUser: null,
   roomId: null,
   playerId: null,
   sessionId: null,
@@ -41,21 +38,8 @@ const COUNTDOWN_SECONDS = {
 
 // DOM元素
 const elements = {
-  loginScreen: document.getElementById('login-screen'),
-  registerScreen: document.getElementById('register-screen'),
   homeScreen: document.getElementById('home-screen'),
   gameScreen: document.getElementById('game-screen'),
-  authStatus: document.getElementById('auth-status'),
-  loginUsername: document.getElementById('login-username'),
-  loginPassword: document.getElementById('login-password'),
-  loginSubmitBtn: document.getElementById('login-submit-btn'),
-  showRegisterBtn: document.getElementById('show-register-btn'),
-  registerUsername: document.getElementById('register-username'),
-  registerPassword: document.getElementById('register-password'),
-  registerConfirmPassword: document.getElementById('register-confirm-password'),
-  registerSubmitBtn: document.getElementById('register-submit-btn'),
-  showLoginBtn: document.getElementById('show-login-btn'),
-  logoutBtn: document.getElementById('logout-btn'),
   playerNameInput: document.getElementById('player-name'),
   createRoomBtn: document.getElementById('create-room-btn'),
   joinRoomBtn: document.getElementById('join-room-btn'),
@@ -122,22 +106,12 @@ function getSessionId() {
   return sessionId;
 }
 
-const authUi = createAuthUi(elements, {
-  getUser: () => gameState.authUser,
-  setUser: (user) => { gameState.authUser = user; },
-  getJoiningRoom: () => gameState.joiningRoom,
-  setPlayerName: (name) => { gameState.playerName = name; },
-  disconnectSocket: () => {
-    if (gameState.socket) {
-      gameState.socket.disconnect();
-      gameState.socket = null;
-    }
-  }
-});
 
 function setJoinBusy(isBusy) {
   gameState.joiningRoom = isBusy;
-  authUi.renderAuthState();
+  elements.createRoomBtn.disabled = isBusy;
+  elements.joinRoomBtn.disabled = isBusy;
+  elements.confirmJoinBtn.disabled = isBusy;
 }
 
 function getSettlementSettingsFromInputs() {
@@ -205,7 +179,6 @@ function init() {
   }
 
   // 事件监听
-  authUi.bindEvents();
   elements.createRoomBtn.addEventListener('click', createRoom);
   elements.joinRoomBtn.addEventListener('click', () => {
     elements.joinRoomPanel.classList.toggle('hidden');
@@ -269,8 +242,7 @@ function init() {
     }
   });
 
-  authUi.renderAuthState();
-  authUi.loadCurrentUser();
+  elements.homeScreen.classList.add('active');
 }
 
 // 连接服务器
@@ -467,12 +439,7 @@ function connectSocket() {
 // 创建房间
 function createRoom() {
   if (gameState.joiningRoom) return;
-  if (!gameState.authUser) {
-    alert('请先登录');
-    return;
-  }
-
-  const name = gameState.authUser.username;
+  const name = elements.playerNameInput.value.trim();
   if (!name) {
     alert('请输入昵称');
     return;
@@ -502,12 +469,7 @@ function createRoom() {
 
 function joinRoom() {
   if (gameState.joiningRoom) return;
-  if (!gameState.authUser) {
-    alert('请先登录');
-    return;
-  }
-
-  const name = gameState.authUser.username;
+  const name = elements.playerNameInput.value.trim();
   const roomId = elements.roomIdInput.value.trim();
 
   if (!name) {
@@ -538,7 +500,10 @@ function joinRoom() {
 }
 
 function enterGame() {
-  authUi.showScreen(elements.gameScreen);
+  [elements.homeScreen, elements.gameScreen].forEach(screen => {
+    screen.classList.remove('active');
+  });
+  elements.gameScreen.classList.add('active');
   setJoinBusy(false);
   elements.roomIdDisplay.textContent = `房间：${gameState.roomId}`;
   elements.myName.textContent = gameState.playerName;

@@ -5,26 +5,24 @@ const test = require('node:test');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
-function extractBetween(startId, endId) {
-  const start = html.indexOf(`<div id="${startId}"`);
-  assert.notEqual(start, -1, `${startId} should exist`);
+function getHomeScreen() {
+  const start = html.indexOf('<div id="home-screen"');
+  assert.notEqual(start, -1, 'home-screen should exist');
 
-  const end = html.indexOf(`<div id="${endId}"`, start + 1);
-  assert.notEqual(end, -1, `${endId} should exist after ${startId}`);
+  const end = html.indexOf('<div id="rules-modal"', start + 1);
+  assert.notEqual(end, -1, 'rules-modal should exist after home-screen');
   return html.slice(start, end);
 }
 
-test('login, register, and room entry are separate screens', () => {
-  const loginScreen = extractBetween('login-screen', 'register-screen');
-  const registerScreen = extractBetween('register-screen', 'home-screen');
-  const homeScreen = extractBetween('home-screen', 'rules-modal');
+test('room entry is available without login or registration screens', () => {
+  const homeScreen = getHomeScreen();
 
-  assert.match(loginScreen, /id="login-submit-btn"/);
-  assert.match(registerScreen, /id="register-submit-btn"/);
+  assert.doesNotMatch(html, /id="login-screen"/);
+  assert.doesNotMatch(html, /id="register-screen"/);
+  assert.doesNotMatch(html, /id="login-submit-btn"/);
+  assert.doesNotMatch(html, /id="register-submit-btn"/);
   assert.match(homeScreen, /id="create-room-btn"/);
   assert.match(homeScreen, /id="join-room-btn"/);
-  assert.doesNotMatch(homeScreen, /id="auth-panel"/);
-  assert.doesNotMatch(homeScreen, /id="login-submit-btn"/);
-  assert.doesNotMatch(homeScreen, /id="register-submit-btn"/);
+  assert.match(homeScreen, /id="player-name"/);
   assert.match(html, /<script type="module" src="game\.js"><\/script>/);
 });

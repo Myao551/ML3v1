@@ -1,10 +1,6 @@
-// @ts-check
+﻿// @ts-check
 
 const { v4: uuidv4 } = require('uuid');
-const {
-  getAuthUserFromSocket,
-  getPlayerSessionId
-} = require('../http/auth-routes');
 const {
   createRoom,
   normalizeSettlementSettings
@@ -12,24 +8,35 @@ const {
 
 /** @typedef {import('socket.io').Server} SocketServer */
 /** @typedef {import('socket.io').Socket} Socket */
-/** @typedef {Socket & { authUser?: import('../types').AuthUser | null; roomId?: string; playerId?: string; sessionId?: string }} GameSocket */
+/** @typedef {Socket & { roomId?: string; playerId?: string; sessionId?: string }} GameSocket */
 
 /**
  * @typedef {{
  *   io: SocketServer;
  *   socket: GameSocket;
  *   rooms: Map<string, any>;
- *   userStore: {
- *     register(username: unknown, password: unknown): import('../types').AuthResult;
- *     authenticate(username: unknown, password: unknown): import('../types').AuthResult;
- *     createSession(userId: string): import('../types').AuthSession | null;
- *     getSessionUser(token: string | null | undefined): import('../types').AuthUser | null;
- *     deleteSession(token: string): void;
- *   };
  *   getRoomState(room: any): any;
  *   startGame(room: any): void;
  * }} RoomLifecycleDeps
  */
+
+/**
+ * @param {unknown} name
+ * @returns {string}
+ */
+function normalizePlayerName(name) {
+  return typeof name === 'string' ? name.trim().slice(0, 12) : '';
+}
+
+/**
+ * @param {unknown} sessionId
+ * @returns {string}
+ */
+function normalizeSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.trim()
+    ? sessionId.trim().slice(0, 80)
+    : uuidv4();
+}
 
 /**
  * @param {GameSocket} socket
@@ -106,18 +113,12 @@ function sendPrivateState(socket, room, player, getRoomState) {
 /**
  * @param {RoomLifecycleDeps} deps
  */
-function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomState, startGame }) {
+function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGame }) {
   socket.on('create-room', (playerPayload, callback = () => {}) => {
-    const authUser = socket.authUser || getAuthUserFromSocket(userStore, socket);
-    if (!authUser) {
-      callback({ success: false, error: '请先登录后再创建房间' });
-      return;
-    }
-
-    const playerName = authUser.username || '';
-    const sessionId = getPlayerSessionId(authUser);
+    const playerName = normalizePlayerName(playerPayload?.name);
+    const sessionId = normalizeSessionId(playerPayload?.sessionId);
     if (!playerName) {
-      callback({ success: false, error: '请先登录后再创建房间' });
+      callback({ success: false, error: '请输入昵称' });
       return;
     }
 
@@ -130,7 +131,6 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
     const player = {
       id: socket.id,
       sessionId,
-      userId: authUser.id,
       name: playerName,
       seat: 0,
       hand: [],
@@ -150,14 +150,8 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
   });
 
   socket.on('join-room', (roomId, playerPayload, callback = () => {}) => {
-    const authUser = socket.authUser || getAuthUserFromSocket(userStore, socket);
-    if (!authUser) {
-      callback({ success: false, error: '请先登录后再加入房间' });
-      return;
-    }
-
-    const playerName = authUser.username || '';
-    const sessionId = getPlayerSessionId(authUser);
+    const playerName = normalizePlayerName(playerPayload?.name);
+    const sessionId = normalizeSessionId(playerPayload?.sessionId);
     const room = rooms.get(String(roomId || ''));
 
     if (!room) {
@@ -166,7 +160,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
     }
 
     if (!playerName) {
-      callback({ success: false, error: '请先登录后再加入房间' });
+      callback({ success: false, error: '请输入昵称' });
       return;
     }
 
@@ -182,7 +176,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
 
     const duplicateName = room.players.some((/** @type {any} */ player) => player.name.trim().toLowerCase() === playerName.toLowerCase());
     if (duplicateName) {
-      callback({ success: false, error: '用户名已在房间中' });
+      callback({ success: false, error: '昵称已被使用' });
       return;
     }
 
@@ -199,7 +193,6 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
     const player = {
       id: socket.id,
       sessionId,
-      userId: authUser.id,
       name: playerName,
       seat: room.players.length,
       hand: [],
@@ -218,9 +211,8 @@ function registerRoomLifecycleEvents({ io, socket, rooms, userStore, getRoomStat
   });
 
   socket.on('rejoin-room', (data, callback = () => {}) => {
-    const authUser = socket.authUser || getAuthUserFromSocket(userStore, socket);
     const roomId = data?.roomId;
-    const sessionId = authUser ? getPlayerSessionId(authUser) : null;
+    const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : null;
     const room = rooms.get(roomId);
 
     if (!room || !sessionId) {

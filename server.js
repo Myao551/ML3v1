@@ -2,11 +2,6 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const { UserStore } = require('./auth-store');
-const {
-  getAuthUserFromSocket,
-  registerAuthRoutes
-} = require('./src/http/auth-routes');
 const {
   createDeck,
   getCardScore,
@@ -43,12 +38,9 @@ const io = socketIo(server, {
   }
 });
 
-const userStore = new UserStore();
-
 app.disable('x-powered-by');
 app.use(express.json({ limit: '16kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-registerAuthRoutes(app, userStore);
 
 // 娓告垙鎴块棿瀛樺偍
 const rooms = new Map();
@@ -56,14 +48,12 @@ const rooms = new Map();
 // Socket.io杩炴帴澶勭悊
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
-  socket.authUser = getAuthUserFromSocket(userStore, socket);
 
   // 鍒涘缓鎴块棿
   registerRoomLifecycleEvents({
     io,
     socket,
     rooms,
-    userStore,
     getRoomState,
     startGame
   });
