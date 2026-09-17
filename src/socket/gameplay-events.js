@@ -1,5 +1,6 @@
 // @ts-check
 
+const { resolveCards } = require('../game/play-rules');
 const { sortCardsForDisplay } = require('../game/cards');
 
 /** @typedef {import('socket.io').Server} SocketServer */
@@ -21,6 +22,7 @@ const { sortCardsForDisplay } = require('../game/cards');
  *   isValidBid(room: any, bid: unknown): boolean;
  *   validatePlay(room: any, cards: any[], playerIndex: number): { valid: boolean; message: string };
  *   finishRound(room: any): void;
+ *   scheduleTurn(room: any): void;
  * }} GameplayDeps
  */
 
@@ -50,7 +52,8 @@ function registerGameplayEvents({
   endGame,
   isValidBid,
   validatePlay,
-  finishRound
+  finishRound,
+  scheduleTurn
 }) {
   socket.on('place-bid', (bid) => {
     const room = getSocketRoom(socket, rooms);
@@ -93,17 +96,18 @@ function registerGameplayEvents({
       room.bidHistory.push({ player: currentPlayer.name, bid });
       room.currentBidder = getNextBidder(room);
 
-      if (bid === 75) {
+      if (bid === 75 || getActiveBidders(room).length === 1) {
         setDealer(
           room,
           room.players.findIndex((/** @type {any} */ player) => player.id === currentPlayer.id),
-          75
+          Number(bid)
         );
         return;
       }
     }
 
     emitBidUpdate(room);
+    scheduleTurn(room);
   });
 
   socket.on('vote-end-game', () => {
@@ -132,6 +136,10 @@ function registerGameplayEvents({
     const dealer = room.players[room.dealer];
     if (dealer.id !== socket.id) return;
 
+    if (typeof isNoTrump !== 'boolean' || (isNoTrump ? suit !== null : !['spades', 'hearts', 'clubs', 'diamonds'].includes(suit))) {
+      socket.emit('invalid-play', '请选择有效主花色或无主');
+      return;
+    }
     room.trumpSuit = suit;
     room.isNoTrump = isNoTrump;
     room.state = 'playing';
@@ -153,6 +161,8 @@ function registerGameplayEvents({
       trumpSuit: room.trumpSuit,
       isNoTrump: room.isNoTrump
     });
+    io.to(room.id).emit('room-update', getRoomState(room));
+    scheduleTurn(room);
   });
 
   socket.on('finish-exchange', (newBottomCards) => {
@@ -167,16 +177,13 @@ function registerGameplayEvents({
       return;
     }
 
-    const selectedIds = new Set();
-    for (const card of newBottomCards) {
-      if (!card || selectedIds.has(card.id) || !dealer.hand.some((/** @type {any} */ candidate) => candidate.id === card.id)) {
-        socket.emit('invalid-play', '底牌选择无效');
-        return;
-      }
-      selectedIds.add(card.id);
+    const canonical = resolveCards(dealer.hand, newBottomCards);
+    if (!canonical) {
+      socket.emit('invalid-play', '底牌选择无效');
+      return;
     }
-
-    room.bottomCards = newBottomCards;
+    const selectedIds = new Set(canonical.map(card => card.id));
+    room.bottomCards = canonical;
     dealer.hand = dealer.hand.filter((/** @type {any} */ card) => !selectedIds.has(card.id));
     dealer.hand.sort((/** @type {any} */ a, /** @type {any} */ b) => sortCardsForDisplay(a, b, room.trumpSuit, room.isNoTrump));
     io.to(dealer.id).emit('hand-sorted', dealer.hand);
@@ -185,6 +192,7 @@ function registerGameplayEvents({
     io.to(room.id).emit('room-update', getRoomState(room));
     io.to(dealer.id).emit('choose-trump-request');
     io.to(room.id).emit('waiting-trump', { dealer: room.dealer });
+    scheduleTurn(room);
   });
 
   socket.on('play-cards', (cards) => {
@@ -198,6 +206,7 @@ function registerGameplayEvents({
 
     if (room.players[room.currentPlayer].id !== socket.id) return;
 
+    cards = resolveCards(room.players[room.currentPlayer].hand, cards);
     const validation = validatePlay(room, cards, room.currentPlayer);
     if (!validation.valid) {
       socket.emit('invalid-play', validation.message);
@@ -220,16 +229,23 @@ function registerGameplayEvents({
     io.to(room.id).emit('cards-played', {
       player: room.currentPlayer,
       cards,
-      nextPlayer: isRoundComplete ? null : (room.currentPlayer + 1) % 4
+      nextPlayer: isRoundComplete ? null : (room.currentPlayer + 1) % 4,
+      cardCount: player.hand.length
     });
 
     if (!isRoundComplete) {
       room.currentPlayer = (room.currentPlayer + 1) % 4;
+      scheduleTurn(room);
       return;
     }
 
     room.roundResolving = true;
-    setTimeout(() => finishRound(room), 1000);
+    scheduleTurn(room);
+    const gameNumber = room.gameNumber;
+    room.roundTimer = setTimeout(() => {
+      room.roundTimer = null;
+      if (room.state === 'playing' && room.gameNumber === gameNumber && room.roundResolving && room.currentRound.length === 4) finishRound(room);
+    }, 1000);
   });
 }
 

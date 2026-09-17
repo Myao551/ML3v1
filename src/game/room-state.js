@@ -31,6 +31,11 @@ function getRoomState(room) {
     isNoTrump: room.isNoTrump,
     currentPlayer: room.currentPlayer,
     currentRoundLength: room.currentRound.length,
+    currentRound: room.currentRound,
+    roundResolving: room.roundResolving,
+    deadline: room.deadline || null,
+    earlyFinishOffered: room.earlyFinishOffered,
+    earlyFinishVoters: [...room.earlyFinishVotes],
     gameNumber: room.gameNumber
   };
 }
@@ -39,6 +44,12 @@ function getRoomState(room) {
  * @param {any} room
  */
 function resetRoomForNextGame(room) {
+  clearTimeout(room.turnTimer);
+  clearTimeout(room.roundTimer);
+  room.turnTimer = null;
+  room.roundTimer = null;
+  room.deadline = null;
+  room.turnKey = null;
   room.state = 'waiting';
   room.gameNumber += 1;
   room.players.forEach((/** @type {any} */ player) => {

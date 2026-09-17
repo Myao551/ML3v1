@@ -29,14 +29,16 @@
 - 对子、拖拉机等牌型需要按规则跟出。
 - 最后一轮闲家用主牌获胜时可以扣底，底牌分按牌型倍数加入闲家得分。
 
-完整规则请参考 `三打一.md`。
+完整规则请参考 `三打一.md`，该文件为当前实现的有效规则。
+
+2026-09-17 修订：暂时禁用甩牌；无主的 2、7、小王、大王为连续等级，同级异花色常主等大；服务端统一计时，超时自动操作，断线托管。刷新页面可恢复当前手牌、出牌轮次和提前结束投票。
 
 ## 本地运行
 
 先安装依赖：
 
 ```bash
-npm install
+npm ci
 ```
 
 启动服务：
@@ -65,7 +67,7 @@ http://localhost:3000
 
 ```text
 Runtime: Node
-Build Command: npm install
+Build Command: npm ci
 Start Command: npm start
 Plan: Free 或更高
 ```
@@ -87,7 +89,7 @@ const PORT = process.env.PORT || 3000;
 5. 设置服务：
    - Name: `sanda1-poker-game`
    - Runtime: `Node`
-   - Build Command: `npm install`
+   - Build Command: `npm ci`
    - Start Command: `npm start`
 6. 创建服务，等待构建完成。
 7. 打开 Render 分配的域名测试游戏。
@@ -113,7 +115,6 @@ Railway 和 Fly.io 也支持长连接服务，可以直接部署本项目的 Nod
 ├── package.json
 ├── server.js
 ├── render.yaml
-├── DEPLOY.md
 ├── README.md
 ├── 三打一.md
 └── public/
@@ -143,3 +144,12 @@ Railway 和 Fly.io 也支持长连接服务，可以直接部署本项目的 Nod
 ## License
 
 MIT
+
+## 验证
+
+```bash
+npm test
+npm run typecheck
+```
+
+测试覆盖服务端牌面权威性、叫分、拖拉机、跟牌、断线重连、超时托管、结算竞态和客户端状态回归；规则样例使用固定随机种子。`typecheck` 的范围以 `tsconfig.json` 为准，目前主要覆盖 `src` 模块。

@@ -99,7 +99,7 @@ const elements = {
 function getSessionId() {
   let sessionId = localStorage.getItem('sanda1-session-id');
   if (!sessionId) {
-    sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionId = crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('sanda1-session-id', sessionId);
   }
   gameState.sessionId = sessionId;
@@ -127,32 +127,33 @@ function updateSettlementDisplay(settings) {
   elements.settlementDisplay.textContent = `\u5927\u5c0f\uff1a${baseScore}+${levelScore}`;
 }
 
-function startCountdown(label, seconds, key) {
-  if (!elements.countdownDisplay) return;
-  if (gameState.countdownKey === key) return;
-
+function startCountdown(label, deadline) {
   clearCountdown();
-  gameState.countdownKey = key;
-  let remaining = seconds;
-
+  if (!deadline) return;
   const render = () => {
-    elements.countdownDisplay.classList.remove('hidden', 'urgent');
-    elements.countdownDisplay.textContent = `${label} ${remaining}s`;
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    elements.countdownDisplay.classList.remove('hidden');
+    elements.countdownDisplay.textContent = remaining ? `${label} ${remaining}s` : '自动处理中…';
     elements.countdownDisplay.classList.toggle('urgent', remaining <= 5);
   };
-
   render();
-  gameState.countdownTimer = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      clearInterval(gameState.countdownTimer);
-      gameState.countdownTimer = null;
-      elements.countdownDisplay.textContent = `${label} 0s`;
-      elements.countdownDisplay.classList.add('urgent');
-      return;
-    }
-    render();
-  }, 1000);
+  gameState.countdownTimer = setInterval(render, 250);
+}
+
+function notify(message) {
+  const toast = document.getElementById('game-notice');
+  toast.textContent = message;
+  toast.classList.remove('hidden');
+  clearTimeout(gameState.noticeTimer);
+  gameState.noticeTimer = setTimeout(() => toast.classList.add('hidden'), 4000);
+}
+
+function updateActionButton() {
+  const count = gameState.selectedCards.length;
+  document.getElementById('selection-count').textContent = gameState.isExchanging ? `已选 ${count} / 8 张底牌` : `已选 ${count} 张`;
+  const canPlay = gameState.currentState === 'playing' && gameState.currentPlayer === gameState.seat && !gameState.roundResolving;
+  elements.playBtn.classList.toggle('hidden', !gameState.isExchanging && !canPlay);
+  elements.playBtn.disabled = !gameState.socket?.connected || (gameState.isExchanging ? count !== 8 : !canPlay || count === 0);
 }
 
 function clearCountdown() {
@@ -200,6 +201,7 @@ function init() {
   elements.toggleChatBtn.classList.add('active');
   elements.sendBtn.addEventListener('click', sendChatMessage);
   elements.earlyFinishBtn.addEventListener('click', voteEndGame);
+  document.getElementById('clear-selection-btn').addEventListener('click', () => { gameState.selectedCards = []; renderHand(); });
   elements.chatInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendChatMessage();
   });
@@ -243,6 +245,8 @@ function init() {
   });
 
   elements.homeScreen.classList.add('active');
+  elements.playerNameInput.value = localStorage.getItem('sanda1-player-name') || '';
+  if (roomIdFromUrl && localStorage.getItem('sanda1-last-room') === roomIdFromUrl && elements.playerNameInput.value) joinRoom();
 }
 
 // 连接服务器
@@ -264,6 +268,11 @@ function connectSocket() {
       }, (response) => {
         if (response?.success) {
           gameState.playerId = response.playerId;
+        } else {
+          gameState.roomId = null;
+          elements.gameScreen.classList.remove('active');
+          elements.homeScreen.classList.add('active');
+          notify('房间已结束，请重新创建或加入');
         }
       });
     }
@@ -276,6 +285,7 @@ function connectSocket() {
 
   gameState.socket.on('deal-cards', (cards) => {
     gameState.hand = cards;
+    gameState.selectedCards = gameState.selectedCards.filter(c => cards.some(item => item.id === c.id));
     renderHand();
     addChatMessage('系统', '游戏开始，你已收到手牌');
   });
@@ -283,6 +293,7 @@ function connectSocket() {
   // 主牌确定后，手牌重新排序
   gameState.socket.on('hand-sorted', (cards) => {
     gameState.hand = cards;
+    gameState.selectedCards = gameState.selectedCards.filter(c => cards.some(item => item.id === c.id));
     renderHand();
   });
 
@@ -305,7 +316,6 @@ function connectSocket() {
     updateBidButtons(105); // 传入105让100分按钮可用
     // 显示叫分面板给当前叫分者
     updateCurrentBidder(data.currentBidder);
-    startCountdown('叫分', COUNTDOWN_SECONDS.bidding, `bidding:${data.currentBidder}:0`);
   });
 
   gameState.socket.on('bid-update', (data) => {
@@ -336,7 +346,6 @@ function connectSocket() {
   // 等待庄家叫主
   gameState.socket.on('waiting-trump', (data) => {
     showTableBottomDeck();
-    startCountdown('选主', COUNTDOWN_SECONDS.choosingTrump, `choosing:${data.dealer}`);
     if (data.dealer !== gameState.seat) {
       addChatMessage('系统', '等待庄家选择主牌...');
     }
@@ -352,14 +361,12 @@ function connectSocket() {
     elements.gameStatus.textContent = '游戏中';
     gameState.currentPlayer = data.currentPlayer;
     gameState.isExchanging = false;
-    elements.earlyFinishPanel.classList.add('hidden');
     elements.tableBottomDeck.classList.add('hidden');
     updateCurrentPlayer(data.currentPlayer);
-    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.currentPlayer}:0`);
 
     // 恢复出牌按钮的事件绑定
     configurePlayButton('play');
-    elements.playBtn.classList.add('hidden');
+    updateActionButton();
   });
 
   gameState.socket.on('cards-played', (data) => {
@@ -367,27 +374,32 @@ function connectSocket() {
     if (data.player === gameState.seat) {
       const playedIds = new Set(data.cards.map(card => card.id));
       gameState.hand = gameState.hand.filter(card => !playedIds.has(card.id));
+      gameState.selectedCards = gameState.selectedCards.filter(card => !playedIds.has(card.id));
       renderHand();
     }
-    updatePlayerCardCount(data.player, data.cards.length);
+    updatePlayerCardCount(data.player, data.cardCount);
+    gameState.roundResolving = data.nextPlayer === null;
     if (gameState.currentRound.length < 4) {
       gameState.currentPlayer = data.nextPlayer;
       updateCurrentPlayer(data.nextPlayer);
-      startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.nextPlayer}:${gameState.currentRound.length}`);
     }
+    updateActionButton();
   });
 
   gameState.socket.on('invalid-play', (message) => {
-    alert(message);
+    notify(message);
   });
 
   gameState.socket.on('invalid-bid', (message) => {
-    alert(message);
+    notify(message);
     updateCurrentBidder(gameState.currentBidder);
   });
 
   gameState.socket.on('round-end', (data) => {
     clearCountdown();
+    gameState.roundResolving = false;
+    elements.playedCardsArea.innerHTML = '';
+    clearSeatPlayPiles();
     gameState.currentRound = [];
     gameState.leadSuit = null;
     renderScoringCards(data.scoringCards || []);
@@ -397,7 +409,6 @@ function connectSocket() {
   gameState.socket.on('next-turn', (data) => {
     gameState.currentPlayer = data.currentPlayer;
     updateCurrentPlayer(data.currentPlayer);
-    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${data.currentPlayer}:${Date.now()}`);
   });
 
   gameState.socket.on('koudi', (data) => {
@@ -429,10 +440,27 @@ function connectSocket() {
     addChatMessage('系统', '有玩家离开了房间');
   });
 
-  gameState.socket.on('connect_error', (error) => {
+  gameState.socket.on('turn-clock', (data) => {
+    const labels = { bidding: '叫分', exchanging: '埋牌', 'choosing-trump': '选主', playing: '出牌' };
+    startCountdown(labels[data.state] || '操作', data.deadline);
+  });
+  gameState.socket.on('automated-action', (data) => {
+    addChatMessage('系统', `${gameState.players[data.player]?.name || '玩家'} 已自动操作`);
+  });
+  gameState.socket.on('disconnect', () => {
+    elements.gameStatus.textContent = '连接中断，正在重连…';
+    elements.playBtn.disabled = true;
+    clearCountdown();
+  });
+  gameState.socket.on('session-replaced', () => {
+    gameState.roomId = null;
+    notify('此座位已在其他窗口登录，请重新加入');
+  });
+
+  gameState.socket.on('connect_error' , (error) => {
     console.error('Connection error:', error);
     setJoinBusy(false);
-    alert('连接服务器失败，请刷新页面重试');
+    notify('连接服务器失败，请刷新页面重试');
   });
 }
 
@@ -441,7 +469,7 @@ function createRoom() {
   if (gameState.joiningRoom) return;
   const name = elements.playerNameInput.value.trim();
   if (!name) {
-    alert('请输入昵称');
+    notify('请输入昵称');
     return;
   }
 
@@ -461,7 +489,7 @@ function createRoom() {
       gameState.sessionId = response.sessionId || gameState.sessionId;
       enterGame();
     } else {
-      alert(response.error);
+      notify(response.error);
       setJoinBusy(false);
     }
   });
@@ -473,11 +501,11 @@ function joinRoom() {
   const roomId = elements.roomIdInput.value.trim();
 
   if (!name) {
-    alert('请输入昵称');
+    notify('请输入昵称');
     return;
   }
   if (!roomId) {
-    alert('请输入房间号');
+    notify('请输入房间号');
     return;
   }
 
@@ -493,7 +521,7 @@ function joinRoom() {
       gameState.sessionId = response.sessionId || gameState.sessionId;
       enterGame();
     } else {
-      alert(response.error);
+      notify(response.error);
       setJoinBusy(false);
     }
   });
@@ -507,6 +535,8 @@ function enterGame() {
   setJoinBusy(false);
   elements.roomIdDisplay.textContent = `房间：${gameState.roomId}`;
   elements.myName.textContent = gameState.playerName;
+  localStorage.setItem('sanda1-player-name', gameState.playerName);
+  localStorage.setItem('sanda1-last-room', gameState.roomId);
 
   const url = new URL(window.location);
   url.searchParams.set('room', gameState.roomId);
@@ -516,6 +546,7 @@ function enterGame() {
 function updateRoomDisplay(room) {
   gameState.players = room.players;
   gameState.currentState = room.state;
+  elements.gameScreen.dataset.state = room.state;
   if (room.settlementSettings) {
     elements.baseScoreInput.value = room.settlementSettings.baseScore;
     elements.levelScoreInput.value = room.settlementSettings.levelScore;
@@ -558,13 +589,32 @@ function syncUiForRoomState(room) {
   gameState.currentPlayer = room.currentPlayer;
   gameState.trumpSuit = room.trumpSuit;
   gameState.isNoTrump = room.isNoTrump;
+  elements.bidList.innerHTML = '';
+  for (const bid of room.bidHistory || []) {
+    const li = document.createElement('li'); li.textContent = `${bid.player}: ${bid.bid === 'pass' ? '不叫' : bid.bid}`; elements.bidList.appendChild(li);
+  }
 
   elements.targetScore.textContent = room.dealerScore || room.currentBid || 100;
   elements.bidPanel.classList.add('hidden');
   elements.trumpPanel.classList.add('hidden');
   elements.earlyFinishPanel.classList.add('hidden');
+  gameState.roundResolving = !!room.roundResolving;
+  gameState.isExchanging = room.state === 'exchanging' && room.dealer === gameState.seat;
+  gameState.currentRound = [];
+  elements.playedCardsArea.innerHTML = '';
+  clearSeatPlayPiles();
+  for (const play of room.currentRound || []) showPlayedCards(play.player, play.cards, false);
+  configurePlayButton(gameState.isExchanging ? 'exchange' : 'play');
+  updateActionButton();
 
   if (room.state === 'waiting') {
+    gameState.hand = [];
+    gameState.selectedCards = [];
+    gameState.exchangePanelShown = false;
+    gameState.isExchanging = false;
+    renderHand();
+    const me = room.players.find(p => p.id === gameState.playerId);
+    elements.readyBtn.textContent = me?.isReady ? '取消准备' : '准备';
     clearCountdown();
     elements.readyBtn.classList.remove('hidden');
     elements.playBtn.classList.add('hidden');
@@ -604,7 +654,6 @@ function syncUiForRoomState(room) {
   if (room.state === 'choosing-trump') {
     elements.bidHistory.classList.remove('hidden');
     elements.scorePanel.classList.remove('hidden');
-    startCountdown('选主', COUNTDOWN_SECONDS.choosingTrump, `choosing:${room.dealer}:${room.gameNumber}`);
     if (room.dealer === gameState.seat) {
       elements.trumpPanel.classList.remove('hidden');
     }
@@ -620,7 +669,12 @@ function syncUiForRoomState(room) {
     }
     configurePlayButton('play');
     updateCurrentPlayer(room.currentPlayer, { silent: true });
-    startCountdown('出牌', COUNTDOWN_SECONDS.playing, `playing:${room.currentPlayer}:${room.gameNumber}:${room.currentRoundLength || 0}`);
+    startCountdown('出牌', room.deadline);
+    if (room.earlyFinishOffered) {
+      showEarlyFinishPanel({ targetScore: room.dealerScore, votes: room.earlyFinishVoters.length, total: room.players.length });
+      updateEarlyFinishVotes({ voters: room.earlyFinishVoters, votes: room.earlyFinishVoters.length, total: room.players.length });
+    }
+    updateActionButton();
   }
 }
 
@@ -636,12 +690,12 @@ function updateSeatDisplay(seatIndex, player) {
   if (seatEl) {
     seatEl.querySelector('.player-name').textContent = player.name;
     seatEl.querySelector('.player-avatar').textContent = (player.name[0] || '?').toUpperCase();
-    seatEl.querySelector('.player-cards').textContent = player.cardCount || 25;
+    seatEl.querySelector('.player-cards').textContent = player.cardCount ?? 0;
     updatePlayerScoreBadge(seatEl, player.settlementScore || 0);
 
     seatEl.classList.toggle('disconnected', !!player.disconnected);
     if (player.disconnected) {
-      seatEl.querySelector('.player-status').textContent = '重连中';
+      seatEl.querySelector('.player-status').textContent = '离线 · 托管';
     } else if (player.isReady) {
       seatEl.querySelector('.player-status').textContent = '已准备';
     } else if (player.isDealer) {
@@ -713,7 +767,6 @@ function formatSignedScore(score) {
 function toggleReady() {
   const isReady = elements.readyBtn.textContent === '准备';
   gameState.socket.emit('player-ready', isReady);
-  elements.readyBtn.textContent = isReady ? '取消准备' : '准备';
   elements.readyBtn.disabled = true;
   setTimeout(() => {
     elements.readyBtn.disabled = false;
@@ -724,10 +777,13 @@ function renderHand() {
   elements.myHand.innerHTML = '';
   elements.myCardCount.textContent = gameState.hand.length;
 
+  const selectedIds = new Set(gameState.selectedCards.map(card => card.id));
   gameState.hand.forEach((card, index) => {
     const cardEl = createCardElement(card, index);
+    cardEl.classList.toggle('selected', selectedIds.has(card.id));
     elements.myHand.appendChild(cardEl);
   });
+  updateActionButton();
 }
 
 // 创建牌元素
@@ -756,10 +812,10 @@ function createCardElement(card, index) {
   } else {
     const suitSymbol = getSuitSymbol(card.suit);
     cardEl.innerHTML = `
-      <span class="corner top">${card.rank}${suitSymbol}</span>
-      <span class="rank">${card.rank}</span>
+      <span class="corner top">${escapeHtml(card.rank)}${suitSymbol}</span>
+      <span class="rank">${escapeHtml(card.rank)}</span>
       <span class="suit">${suitSymbol}</span>
-      <span class="corner bottom">${card.rank}${suitSymbol}</span>
+      <span class="corner bottom">${escapeHtml(card.rank)}${suitSymbol}</span>
     `;
   }
 
@@ -772,70 +828,19 @@ function createCardElement(card, index) {
   return cardEl;
 }
 
-function getAutoSelectCards(card) {
-  if (gameState.isExchanging) return [card];
-
-  const effectiveSuit = getClientEffectiveSuit(card);
-  const suitedCards = gameState.hand.filter(handCard => getClientEffectiveSuit(handCard) === effectiveSuit);
-  const groups = new Map();
-  suitedCards.forEach(handCard => {
-    const key = `${handCard.suit}-${handCard.rank}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(handCard);
-  });
-
-  const pairGroups = [...groups.entries()]
-    .filter(([, groupCards]) => groupCards.length >= 2)
-    .map(([key, groupCards]) => ({
-      key,
-      rankIndex: getClientRankIndex(groupCards[0]),
-      cards: groupCards.slice(0, 2)
-    }))
-    .sort((a, b) => a.rankIndex - b.rankIndex);
-
-  const clickedKey = `${card.suit}-${card.rank}`;
-  const clickedPair = pairGroups.find(group => group.key === clickedKey);
-  if (!clickedPair) return [card];
-
-  const clickedIndex = pairGroups.indexOf(clickedPair);
-  let start = clickedIndex;
-  let end = clickedIndex;
-
-  while (start > 0 && pairGroups[start].rankIndex === pairGroups[start - 1].rankIndex + 1) {
-    start--;
-  }
-  while (end < pairGroups.length - 1 && pairGroups[end + 1].rankIndex === pairGroups[end].rankIndex + 1) {
-    end++;
-  }
-
-  const chain = pairGroups.slice(start, end + 1);
-  return (chain.length >= 2 ? chain : [clickedPair]).flatMap(group => group.cards);
-}
-
 function toggleCardSelection(card, cardEl) {
   const cardId = card.id || cardEl.dataset.cardId;
   const index = gameState.selectedCards.findIndex(c => c.id === cardId);
 
   if (index === -1) {
-    getAutoSelectCards(card).forEach(autoCard => {
-      if (!gameState.selectedCards.some(selected => selected.id === autoCard.id)) {
-        gameState.selectedCards.push(autoCard);
-      }
-      const autoCardEl = elements.myHand.querySelector(`[data-card-id="${autoCard.id}"]`);
-      if (autoCardEl) autoCardEl.classList.add('selected');
-    });
+    gameState.selectedCards.push(card);
+    cardEl.classList.add('selected');
   } else {
     gameState.selectedCards.splice(index, 1);
     cardEl.classList.remove('selected');
   }
 
-  if (gameState.isExchanging || elements.playBtn.dataset.action === 'exchange') {
-    elements.playBtn.classList.remove('hidden');
-  } else if (gameState.selectedCards.length > 0) {
-    elements.playBtn.classList.remove('hidden');
-  } else {
-    elements.playBtn.classList.add('hidden');
-  }
+  updateActionButton();
 }
 
 function playCards() {
@@ -845,212 +850,25 @@ function playCards() {
   // 验证出牌规则
   const validation = validatePlay(gameState.selectedCards);
   if (!validation.valid) {
-    alert(validation.message);
+    notify(validation.message);
     return;
   }
 
-  gameState.socket.emit('play-cards', gameState.selectedCards);
-  gameState.selectedCards = [];
-  elements.playBtn.classList.add('hidden');
+  if (gameState.currentState !== 'playing' || gameState.currentPlayer !== gameState.seat) return;
+  gameState.socket.emit('play-cards', gameState.selectedCards.map(card => card.id));
 
-  // 移除选中状态
-  document.querySelectorAll('.card.selected').forEach(el => {
-    el.classList.remove('selected');
-  });
 }
 
 // 验证出牌规则
-function getClientCardValue(card) {
-  const suitOrder = { spades: 3, hearts: 2, diamonds: 1, clubs: 0 };
-  const rankValue = { A: 14, K: 13, Q: 12, J: 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6, '5': 5, '4': 4, '3': 3 };
-
-  if (card.rank === 'big') return 1000;
-  if (card.rank === 'small') return 999;
-  if (card.rank === '7' && card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 998;
-  if (card.rank === '7') return 200 + (suitOrder[card.suit] || 0);
-  if (card.rank === '2' && card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 197;
-  if (card.rank === '2') return 100 + (suitOrder[card.suit] || 0);
-  if (card.suit === gameState.trumpSuit && !gameState.isNoTrump) return 50 + (rankValue[card.rank] || 0);
-  return rankValue[card.rank] || 0;
-}
-
 function isClientTrumpCard(card) {
-  if (card.suit === 'joker') return true;
-  if (card.rank === '2' || card.rank === '7') return true;
-  if (!gameState.isNoTrump && card.suit === gameState.trumpSuit) return true;
-  return false;
-}
-
-function getClientEffectiveSuit(card) {
-  return isClientTrumpCard(card) ? 'trump' : card.suit;
-}
-
-function getClientRankIndex(card) {
-  const normalOrder = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-
-  if (getClientEffectiveSuit(card) === 'trump') {
-    if (card.rank === 'big') return 16;
-    if (card.rank === 'small') return 15;
-    if (card.rank === '7') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 14 : 13;
-    if (card.rank === '2') return (!gameState.isNoTrump && card.suit === gameState.trumpSuit) ? 12 : 11;
-  }
-
-  if (card.rank === 'big') return 100;
-  if (card.rank === 'small') return 99;
-  return normalOrder.indexOf(card.rank);
-}
-
-function getClientPairGroups(cards) {
-  const groups = new Map();
-  cards.forEach(card => {
-    const key = `${card.suit}-${card.rank}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(card);
-  });
-
-  return [...groups.values()]
-    .filter(group => group.length >= 2)
-    .map(group => ({
-      rankIndex: getClientRankIndex(group[0]),
-      value: getClientCardValue(group[0])
-    }))
-    .sort((a, b) => a.rankIndex - b.rankIndex);
-}
-
-function getClientLongestTractor(pairGroups) {
-  let best = [];
-  let current = [];
-  pairGroups.forEach(group => {
-    const previous = current[current.length - 1];
-    if (!previous || group.rankIndex === previous.rankIndex + 1) {
-      current.push(group);
-    } else {
-      current = [group];
-    }
-    if (current.length > best.length) best = current.slice();
-  });
-  return best.length >= 2 ? best : [];
-}
-
-function analyzeClientPlay(cards) {
-  if (!Array.isArray(cards) || cards.length === 0) return { valid: false };
-  const suit = getClientEffectiveSuit(cards[0]);
-  if (!cards.every(card => getClientEffectiveSuit(card) === suit)) return { valid: false };
-
-  const pairGroups = getClientPairGroups(cards);
-  const tractorGroups = getClientLongestTractor(pairGroups);
-  let type = 'throw';
-  if (cards.length === 1) type = 'single';
-  else if (cards.length === 2 && pairGroups.length === 1) type = 'pair';
-  else if (cards.length >= 4 && cards.length % 2 === 0 && pairGroups.length * 2 === cards.length && tractorGroups.length === pairGroups.length) type = 'tractor';
-
-  return {
-    valid: true,
-    type,
-    suit,
-    length: cards.length,
-    pairCount: pairGroups.length,
-    tractorLength: tractorGroups.length
-  };
-}
-
-function clientCountEffectiveSuit(cards, suit) {
-  return cards.filter(card => getClientEffectiveSuit(card) === suit).length;
-}
-
-function getClientFollowSuitKey(cards) {
-  const leadSuit = getClientEffectiveSuit(cards[0]);
-  return leadSuit;
-}
-
-function clientMatchesFollowSuit(card, suitKey) {
-  return getClientEffectiveSuit(card) === suitKey;
-}
-
-function getClientFollowSuitCards(cards, suitKey) {
-  return cards.filter(card => clientMatchesFollowSuit(card, suitKey));
-}
-
-function clientCountFollowSuit(cards, suitKey) {
-  return getClientFollowSuitCards(cards, suitKey).length;
-}
-
-function clientHasPair(cards, suit) {
-  return getClientPairGroups(cards.filter(card => getClientEffectiveSuit(card) === suit)).length > 0;
-}
-
-function clientHasTractor(cards, suit, minLength) {
-  const suitedCards = cards.filter(card => getClientEffectiveSuit(card) === suit);
-  return getClientLongestTractor(getClientPairGroups(suitedCards)).length >= minLength;
-}
-
-function clientFollowSuitHasPair(cards, suitKey) {
-  return getClientPairGroups(getClientFollowSuitCards(cards, suitKey)).length > 0;
-}
-
-function clientFollowSuitHasTractor(cards, suitKey, minLength) {
-  return getClientLongestTractor(getClientPairGroups(getClientFollowSuitCards(cards, suitKey))).length >= minLength;
+  return card.suit === 'joker' || card.rank === '2' || card.rank === '7' || (!gameState.isNoTrump && card.suit === gameState.trumpSuit);
 }
 
 function validatePlay(cards) {
-  if (gameState.currentRound.length === 0) {
-    const playAnalysis = analyzeClientPlay(cards);
-    return playAnalysis.valid
-      ? { valid: true }
-      : { valid: false, message: '出牌必须是同一花色；主牌、常主和王算作主牌花色。' };
+  if (gameState.currentRound.length && cards.length !== gameState.currentRound[0].cards.length) {
+    return { valid: false, message: `本轮必须出 ${gameState.currentRound[0].cards.length} 张牌` };
   }
-
-  const firstPlay = gameState.currentRound[0];
-  const leadAnalysis = analyzeClientPlay(firstPlay.cards);
-  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) {
-    return { valid: false, message: `本轮必须出 ${firstPlay.cards.length} 张牌。` };
-  }
-
-  const leadFollowSuit = getClientFollowSuitKey(firstPlay.cards);
-  const leadSuitInHand = clientCountFollowSuit(gameState.hand, leadFollowSuit);
-  const requiredFollowCount = Math.min(leadAnalysis.length, leadSuitInHand);
-  const playedLeadSuitCount = clientCountFollowSuit(cards, leadFollowSuit);
-  if (playedLeadSuitCount < requiredFollowCount) {
-    return { valid: false, message: '你有首家花色时必须优先跟足。' };
-  }
-
-  const playedLeadSuitCards = getClientFollowSuitCards(cards, leadFollowSuit);
-  const followedLeadSuit = playedLeadSuitCount > 0;
-  const allPlayedTrump = cards.every(card => getClientEffectiveSuit(card) === 'trump');
-  const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
-  if (followedLeadSuit || isTrumpKill) {
-    const obligationSuit = followedLeadSuit ? leadFollowSuit : 'trump';
-    const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
-    const structureAnalysis = analyzeClientPlay(structureCards);
-    const obligationSuitInHand = followedLeadSuit
-      ? clientCountFollowSuit(gameState.hand, obligationSuit)
-      : clientCountEffectiveSuit(gameState.hand, obligationSuit);
-    const hasObligationTractor = followedLeadSuit
-      ? clientFollowSuitHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength)
-      : clientHasTractor(gameState.hand, obligationSuit, leadAnalysis.tractorLength);
-    const hasObligationPair = followedLeadSuit
-      ? clientFollowSuitHasPair(gameState.hand, obligationSuit)
-      : clientHasPair(gameState.hand, obligationSuit);
-    if (leadAnalysis.type === 'tractor' || leadAnalysis.tractorLength >= 2) {
-      if (obligationSuitInHand >= leadAnalysis.tractorLength * 2 &&
-          hasObligationTractor) {
-        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength >= leadAnalysis.tractorLength
-          ? { valid: true }
-          : { valid: false, message: '你有对应拖拉机时必须跟拖拉机。' };
-      }
-      if (obligationSuitInHand >= 2 &&
-          hasObligationPair && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
-        return { valid: false, message: '你没有拖拉机但有对子时必须跟对子。' };
-      }
-    }
-
-    if ((leadAnalysis.type === 'pair' || leadAnalysis.pairCount > 0) &&
-        obligationSuitInHand >= 2 &&
-        hasObligationPair && (!structureAnalysis.valid || structureAnalysis.pairCount === 0)) {
-      return { valid: false, message: '你有对子时必须跟对子。' };
-    }
-  }
-
+  // Authoritative rules are applied on the server; do not duplicate them here.
   return { valid: true };
 }
 
@@ -1100,7 +918,6 @@ function updateBidDisplay(data) {
   // 检查是否轮到自己（只有在叫分阶段才显示叫分面板）
   if (data.state === 'bidding') {
     updateCurrentBidder(data.currentBidder);
-    startCountdown('叫分', COUNTDOWN_SECONDS.bidding, `bidding:${data.currentBidder}:${data.bidHistory.length}`);
   } else {
     // 其他阶段隐藏叫分面板
     elements.bidPanel.classList.add('hidden');
@@ -1134,6 +951,7 @@ function updateTrumpDisplay(suit, isNoTrump) {
       diamonds: { symbol: '\u2666', name: '\u65b9\u7247', color: '#d97706' }
     };
     const info = suitInfo[suit];
+    if (!info) return;
     elements.trumpDisplay.innerHTML = `<span class="trump-symbol">${info.symbol}</span><span>\u4e3b\u724c\uff1a${info.name}</span>`;
     elements.trumpDisplay.style.background = `linear-gradient(135deg, ${info.color}, #0f172a)`;
   }
@@ -1152,7 +970,7 @@ function showBottomCards(cards) {
 }
 
 function sortClientHand(cards) {
-  const rankOrder = { big: 100, small: 99, '2': 98, '7': 97, A: 14, K: 13, Q: 12, J: 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
+  const rankOrder = { big: 100, small: 99, '2': 97, '7': 98, A: 14, K: 13, Q: 12, J: 11, '10': 10, '9': 9, '8': 8, '6': 6, '5': 5, '4': 4, '3': 3 };
   const suitOrder = { spades: 4, hearts: 3, clubs: 2, diamonds: 1, joker: 5 };
 
   return [...cards].sort((a, b) => {
@@ -1176,7 +994,6 @@ function sortClientHand(cards) {
 }
 
 function showExchangePanel(payload) {
-  if (gameState.exchangePanelShown) return;
   clearCountdown();
 
   const bottomCards = Array.isArray(payload) ? payload : (payload.bottomCards || []);
@@ -1198,6 +1015,7 @@ function showExchangePanel(payload) {
   elements.playBtn.textContent = '\u786e\u5b9a\u5e95\u724c';
 
   configurePlayButton('exchange');
+  updateActionButton();
 }
 
 function resetExchangePanel() {
@@ -1225,7 +1043,7 @@ function configurePlayButton(action) {
 function confirmExchangeSelection() {
   const selectedCards = document.querySelectorAll('.card.selected');
   if (selectedCards.length !== 8) {
-    alert(`\u8bf7\u9009\u62e9 8 \u5f20\u724c\u4f5c\u4e3a\u5e95\u724c\uff0c\u5f53\u524d\u9009\u62e9\u4e86 ${selectedCards.length} \u5f20\u3002`);
+    notify(`\u8bf7\u9009\u62e9 8 \u5f20\u724c\u4f5c\u4e3a\u5e95\u724c\uff0c\u5f53\u524d\u9009\u62e9\u4e86 ${selectedCards.length} \u5f20\u3002`);
     return;
   }
 
@@ -1233,25 +1051,17 @@ function confirmExchangeSelection() {
     .map(el => gameState.hand.find(card => card.id === el.dataset.cardId))
     .filter(Boolean);
 
-  gameState.bottomCards = selectedCardsData;
-  gameState.hand = gameState.hand.filter(card => !selectedCardsData.some(selected => selected.id === card.id));
-  gameState.socket.emit('finish-exchange', gameState.bottomCards);
+  gameState.socket.emit('finish-exchange', selectedCardsData.map(card => card.id));
 
-  gameState.isExchanging = false;
-  gameState.selectedCards = [];
-  configurePlayButton('play');
-  elements.playBtn.classList.add('hidden');
-  renderHand();
-  addChatMessage('\u7cfb\u7edf', '\u5e95\u724c\u5df2\u786e\u5b9a\uff0c\u7b49\u5f85\u5e84\u5bb6\u9009\u4e3b\u3002');
 }
 
-function showPlayedCards(playerIndex, cards) {
+function showPlayedCards(playerIndex, cards, recordHistory = true) {
   const playerName = gameState.players[playerIndex]?.name || '玩家';
 
   // 显示在桌面中央
   const playContainer = document.createElement('div');
   playContainer.className = 'play-container';
-  playContainer.innerHTML = `<span class="player-label">${playerName}</span>`;
+  playContainer.innerHTML = `<span class="player-label">${escapeHtml(playerName)}</span>`;
 
   const cardsContainer = document.createElement('div');
   cardsContainer.className = 'played-cards-container';
@@ -1266,7 +1076,7 @@ function showPlayedCards(playerIndex, cards) {
   renderSeatPlayPile(playerIndex, cards);
 
   // 添加到出牌记录
-  addPlayHistory(playerName, cards);
+  if (recordHistory) addPlayHistory(playerName, cards);
 
   // 记录到当前轮次
   gameState.currentRound.push({
@@ -1290,19 +1100,7 @@ function showPlayedCards(playerIndex, cards) {
     }
   }
 
-  // 4张出完后，清除当前轮次记录
-  if (gameState.currentRound.length === 4) {
-    setTimeout(() => {
-      gameState.currentRound = [];
-      gameState.leadSuit = null;
-      elements.playedCardsArea.innerHTML = '';
-    }, 3000);
-  } else {
-    // 3秒后清除（如果还没出完4张）
-    setTimeout(() => {
-      playContainer.remove();
-    }, 3000);
-  }
+
 }
 
 // 添加出牌记录
@@ -1370,7 +1168,7 @@ function createPlayedCardElement(card) {
   } else {
     const suitSymbol = getSuitSymbol(card.suit);
     cardEl.innerHTML = `
-      <span class="rank">${card.rank}</span>
+      <span class="rank">${escapeHtml(card.rank)}</span>
       <span class="suit">${suitSymbol}</span>
     `;
   }
@@ -1389,6 +1187,7 @@ function updateCurrentPlayer(playerIndex, options = {}) {
     seatEl.classList.add('active');
   }
 
+  updateActionButton();
   if (!options.silent && playerIndex === gameState.seat) {
     addChatMessage('\u7cfb\u7edf', '\u8f6e\u5230\u4f60\u4e86\uff01');
   }
@@ -1398,8 +1197,7 @@ function updatePlayerCardCount(playerIndex, count) {
   const seatEl = getSeatElement(playerIndex);
 
   if (seatEl) {
-    const currentCount = parseInt(seatEl.querySelector('.player-cards').textContent);
-    seatEl.querySelector('.player-cards').textContent = currentCount - count;
+    seatEl.querySelector('.player-cards').textContent = count;
   }
 }
 
@@ -1581,7 +1379,7 @@ function copyInviteLink() {
     setTimeout(() => {
       elements.copyLinkBtn.textContent = '\u590d\u5236\u9080\u8bf7';
     }, 2000);
-  });
+  }).catch(() => notify(`复制失败，房间号：${gameState.roomId}`));
 }
 
 function sendChatMessage() {
@@ -1594,8 +1392,9 @@ function sendChatMessage() {
 function addChatMessage(player, message) {
   const msgEl = document.createElement('div');
   msgEl.className = 'message';
-  msgEl.innerHTML = `<span class="player-name">${player}:</span> ${escapeHtml(message)}`;
+  msgEl.innerHTML = `<span class="player-name">${escapeHtml(player)}:</span> ${escapeHtml(message)}`;
   elements.chatMessages.appendChild(msgEl);
+  while (elements.chatMessages.children.length > 150) elements.chatMessages.firstChild.remove();
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 

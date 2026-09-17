@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Ma+Shan+Zheng&family=Playfair+Display:wght@400;700&display=swap');
 
 /* ═══════════════════════════════════════════════════
    TOKEN SYSTEM
@@ -1412,4 +1411,74 @@ body::before {
   background: rgba(255, 237, 237, 0.96);
   border-color: rgba(239, 68, 68, 0.38);
   color: #dc2626;
+}
+
+/* Readable table layout, resilient hands and visible action feedback. */
+:root {
+  --gold-dim: #b69b51;
+  --slate: #b1bdc8;
+  --font-serif: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Songti SC", "Noto Serif SC", serif;
+}
+body::before { display: none; }
+.home-container { background: #16231e; box-shadow: 0 24px 80px #0005; }
+.home-container h1 { font-weight: 700; }
+.game-container { padding-right: 278px; }
+.score-panel { top: 88px; right: 12px; left: auto; width: 250px; max-height: 48vh; overflow: auto; }
+.bid-history { right: 12px; top: 88px; width: 250px; max-width: none; }
+.score-panel:not(.hidden) ~ .chat-box { bottom: 18px; }
+.chat-box { width: 250px; right: 12px; bottom: 18px; }
+.bid-history:not(.hidden) + .score-panel { top: 290px; }
+.hand-caption { display: flex; justify-content: space-between; gap: 12px; color: var(--ivory); font-size: 13px; padding: 0 8px; }
+.hand-caption small { color: var(--slate); margin-left: 12px; font-size: 11px; }
+#selection-count { color: var(--gold-light); white-space: nowrap; }
+.hand-cards { justify-content: flex-start; padding-top: 26px; min-width: 0; }
+.hand-cards .card:first-child { margin-left: auto; }
+.hand-cards .card:last-child { margin-right: auto; }
+.card .corner { font-size: 12px; }
+.hand-cards .card.selected { transform: translateY(-12px); }
+.player-seat.active { outline: 2px solid var(--gold-light); outline-offset: 3px; }
+.player-seat.disconnected { opacity: .65; }
+.trump-indicator { animation: none; }
+.countdown-display { background: #243e32; color: #f2d77c; border-color: #8a743b; box-shadow: none; }
+.game-notice { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); max-width: min(500px, 90vw); z-index: 10000; padding: 14px 22px; border: 1px solid #d8b952; border-radius: 12px; background: #192b22; color: #fff7dc; box-shadow: 0 8px 40px #0007; }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #e8c84a; outline-offset: 3px; }
+.played-cards-container { flex-wrap: wrap; justify-content: center; }
+@media (max-width: 1000px) and (min-width: 769px) {
+  .game-container { padding-right: 220px; }
+  .score-panel, .bid-history, .chat-box { width: 196px; }
+  .table { grid-template-columns: 85px 1fr 85px; }
+  .top-bar { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
+@media (max-width: 768px) {
+  .game-container { padding: 8px; }
+  .score-panel, .bid-history, .chat-box { position: static; width: 100%; max-height: 180px; }
+  .hand-area { order: 20; }
+  .hand-caption small { display: none; }
+  .hand-cards { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 62px); grid-auto-columns: 44px; gap: 7px 3px; justify-content: start; padding: 18px 6px 8px; }
+  .hand-cards .card, .hand-cards .card:first-child, .hand-cards .card:last-child { margin: 0; }
+  .hand-cards .card.selected { transform: translateY(-8px); }
+  .hand-actions { gap: 8px; }
+  .hand-actions .btn { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+.player-seat.top, .player-seat.bottom { flex-direction: row; gap: 10px; min-height: 62px; padding: 8px 14px; }
+.player-cards { color: #b5cbbf; }
+.player-cards::after { content: ' 张'; }
+.table { grid-template-rows: auto minmax(0, 1fr) auto; }
+.table-center { min-width: 0; min-height: 0; }
+#game-screen[data-state="waiting"] .hand-cards,
+#game-screen[data-state="waiting"] .hand-caption,
+#game-screen[data-state="waiting"] #clear-selection-btn { display: none; }
+@media (max-width: 768px) {
+  .player-seat.top, .player-seat.bottom { max-width: 100%; gap: 6px; padding: 6px; flex-wrap: wrap; }
+  .table { min-height: 400px; grid-template-rows: auto minmax(160px, 1fr) auto; }
+}
+
+@media (max-width: 768px) {
+  #game-screen:not([data-state="waiting"]) .game-container { padding-bottom: 276px; }
+  #game-screen:not([data-state="waiting"]) .hand-area { position: fixed; left: 8px; right: 8px; bottom: 8px; }
 }

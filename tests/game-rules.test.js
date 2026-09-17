@@ -20,7 +20,7 @@ test('initial deal sorting keeps constant trumps before normal cards', () => {
 
   const sorted = [...hand].sort(sortCardsForInitialDeal).map(item => item.rank);
 
-  assert.deepEqual(sorted, ['big', 'small', '2', '7', 'A', 'K']);
+  assert.deepEqual(sorted, ['big', 'small', '7', '2', 'A', 'K']);
 });
 
 test('validatePlay returns localized messages for invalid play requests', () => {

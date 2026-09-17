@@ -19,7 +19,8 @@ const {
   analyzePlay,
   doesPlayBeat,
   getBottomMultiplier,
-  validatePlay
+  validatePlay,
+  getAutoPlay
 } = require('./src/game/play-rules');
 const {
   getRoomState,
@@ -42,20 +43,18 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '16kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 娓告垙鎴块棿瀛樺偍
 const rooms = new Map();
 
-// Socket.io杩炴帴澶勭悊
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
-  // 鍒涘缓鎴块棿
   registerRoomLifecycleEvents({
     io,
     socket,
     rooms,
     getRoomState,
-    startGame
+    startGame,
+    scheduleTurn
   });
 
   registerGameplayEvents({
@@ -71,12 +70,12 @@ io.on('connection', (socket) => {
     endGame,
     isValidBid,
     validatePlay,
-    finishRound
+    finishRound,
+    scheduleTurn
   });
 
 });
 
-// 寮€濮嬫父鎴?
 function emitBidUpdate(room) {
   io.to(room.id).emit('bid-update', {
     currentBid: room.currentBid,
@@ -91,6 +90,9 @@ function emitBidUpdate(room) {
 function handleAllPass(room) {
   const standings = getAllPassStandings(room);
   const loser = standings[0];
+  clearTimeout(room.turnTimer);
+  clearTimeout(room.roundTimer);
+  room.deadline = null;
   room.state = 'ended';
 
   io.to(room.id).emit('all-pass-loser', {
@@ -122,6 +124,7 @@ function setDealer(room, dealerIndex, dealerScore) {
     bottomCards: room.bottomCards,
     hand: dealer.hand
   });
+  scheduleTurn(room);
 }
 
 function startGame(room) {
@@ -147,7 +150,6 @@ function startGame(room) {
   room.earlyFinishVotes = new Set();
   room.earlyFinishOffered = false;
 
-  // 鍙戠墝锛氭瘡浜?5寮狅紝8寮犲簳鐗?(鍏?08寮?
   room.bottomCards = room.deck.slice(0, 8);
   let cardIndex = 8;
 
@@ -155,21 +157,14 @@ function startGame(room) {
     room.players[i].hand = room.deck.slice(cardIndex, cardIndex + 25);
     cardIndex += 25;
 
-    // 鍒濆鎺掑簭锛堟棤涓绘椂锛夛細甯镐富(2銆?銆佺帇)浼樺厛锛屽壇鐗岀孩榛戠浉闂?
     room.players[i].hand.sort(sortCardsForInitialDeal);
-      // 绾㈤粦鐩搁棿锛氶粦妗?榛?銆佺孩妗?绾?銆佹鑺?榛?銆佹柟鐗?绾? -> 浣嗘寜榛戠孩椤哄簭鎺掑垪
 
-      // 澶х帇銆佸皬鐜嬫渶鍓?
 
-      // 鐒跺悗鏄?鍜?锛堝父涓伙級
 
-      // 鍓墝锛氱孩榛戠浉闂存帓鍒楋紙榛戞銆佺孩妗冦€佹鑺便€佹柟鐗囷級锛屽悓鑺辫壊鍐呮寜澶у皬
 
-    // 鍙戦€佹墜鐗岀粰鐜╁
     io.to(room.players[i].id).emit('deal-cards', room.players[i].hand);
   }
 
-  // 纭畾绗竴涓彨鍒嗚€?
   room.currentBidder = (room.nextBidder || 0) % room.players.length;
   room.currentPlayer = room.currentBidder;
 
@@ -182,9 +177,11 @@ function startGame(room) {
     teamScore: room.scores.team,
     bottomCardCount: 8
   });
+  scheduleTurn(room);
 }
 
 function finishRound(room) {
+  if (room.state !== 'playing' || room.currentRound.length !== 4) return;
   const firstPlay = room.currentRound[0];
   const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
   let winner = 0;
@@ -204,7 +201,6 @@ function finishRound(room) {
   const winnerPlayer = room.currentRound[winner].player;
   const winnerIsDealer = room.players[winnerPlayer].isDealer;
 
-  // 闂插寰楀垎
   if (!winnerIsDealer) {
     room.scores.team += roundScore;
     const scoreCards = room.currentRound.flatMap(play => play.cards).filter(card => getCardScore(card) > 0);
@@ -217,12 +213,10 @@ function finishRound(room) {
     isDealerWin: winnerIsDealer
   });
 
-  // 妫€鏌ユ槸鍚︽槸鏈€鍚庝竴杞紙鎶犲簳锛?
   const isLastRound = room.players.every(p => p.hand.length === 0);
   const winnerAnalysis = analyzePlay(room.currentRound[winner].cards, room.trumpSuit, room.isNoTrump);
 
   if (isLastRound && !winnerIsDealer && winnerAnalysis.suit === 'trump') {
-    // 鎶犲簳
     let multiplier = getBottomMultiplier(winnerAnalysis);
     const bottomScore = room.bottomCards.reduce((sum, c) => sum + getCardScore(c), 0) * multiplier;
     room.scores.team += bottomScore;
@@ -267,11 +261,14 @@ function finishRound(room) {
   } else {
     room.currentPlayer = winnerPlayer;
     io.to(room.id).emit('next-turn', { currentPlayer: winnerPlayer });
+    scheduleTurn(room);
   }
 }
 
-// 缁撴潫娓告垙
 function endGame(room, reason = 'normal') {
+  clearTimeout(room.turnTimer);
+  clearTimeout(room.roundTimer);
+  room.deadline = null;
   room.state = 'ended';
   const finalScore = room.scores.team;
   const targetScore = room.dealerScore;
@@ -284,7 +281,7 @@ function endGame(room, reason = 'normal') {
   }
 
   const settlement = calculateSettlement(room, result, finalScore);
-  room.nextBidder = room.dealer === null ? 0 : (room.dealer + 1) % room.players.length;
+  room.nextBidder = room.dealer === null ? 0 : (result === 'dealer-won' ? room.dealer : (room.dealer + 1) % room.players.length);
 
   io.to(room.id).emit('game-end', {
     result,
@@ -297,6 +294,40 @@ function endGame(room, reason = 'normal') {
 
   resetRoomForNextGame(room);
   io.to(room.id).emit('room-update', getRoomState(room));
+}
+
+// One authoritative timer per turn; stale callbacks cannot act on another game.
+function scheduleTurn(room) {
+  clearTimeout(room.turnTimer);
+  room.turnTimer = null;
+  const durations = { bidding: 20000, exchanging: 45000, 'choosing-trump': 20000, playing: 30000 };
+  if (!durations[room.state] || room.roundResolving) {
+    room.deadline = null;
+    room.turnKey = null;
+    io.to(room.id).emit('turn-clock', { deadline: null, state: room.state });
+    return;
+  }
+  const index = room.state === 'bidding' ? room.currentBidder : room.state === 'playing' ? room.currentPlayer : room.dealer;
+  const player = room.players[index];
+  const key = [room.gameNumber, room.state, index, room.bidHistory.length, room.roundScores.length, room.currentRound.length].join(':');
+  const proposed = Date.now() + (player.disconnected ? 2000 : durations[room.state]);
+  room.deadline = room.turnKey === key && room.deadline ? Math.min(room.deadline, proposed) : proposed;
+  room.turnKey = key;
+  io.to(room.id).emit('turn-clock', { deadline: room.deadline, state: room.state, player: index, automatic: !!player.disconnected });
+  room.turnTimer = setTimeout(() => {
+    if (rooms.get(room.id) !== room || room.turnKey !== key || room.roundResolving) return;
+    const handlers = {};
+    const autoSocket = { id: player.id, roomId: room.id, on(event, handler) { handlers[event] = handler; }, emit() {} };
+    registerGameplayEvents({ io, socket: autoSocket, rooms, getRoomState, emitBidUpdate,
+      getActiveBidders, getNextBidder, handleAllPass, setDealer, endGame, isValidBid, validatePlay, finishRound, scheduleTurn });
+    io.to(room.id).emit('automated-action', { player: index, state: room.state });
+    if (room.state === 'bidding') handlers['place-bid']('pass');
+    else if (room.state === 'exchanging') {
+      const cards = [...player.hand].sort((a, b) => getCardScore(a) - getCardScore(b));
+      handlers['finish-exchange'](cards.slice(0, 8));
+    } else if (room.state === 'choosing-trump') handlers['choose-trump'](null, true);
+    else if (room.state === 'playing') handlers['play-cards'](getAutoPlay(room, index));
+  }, Math.max(0, room.deadline - Date.now()));
 }
 
 const PORT = process.env.PORT || 3000;

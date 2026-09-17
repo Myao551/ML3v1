@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>三打一 - 在线扑克游戏</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Ma+Shan+Zheng&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -69,8 +66,9 @@
           <h3>常主</h3>
           <ul>
             <li>王、2、7 为常主，无论叫何花色均属主牌。</li>
-            <li>大小以花色区分：副2 &lt; 主2 &lt; 副7 &lt; 主7 &lt; 小王 &lt; 大王。</li>
+            <li>有主：副2 &lt; 主2 &lt; 副7 &lt; 主7 &lt; 小王 &lt; 大王。同级异花色等大，先出者大。</li>
           </ul>
+          <p>无主时：2 → 7 → 小王 → 大王，相邻等级的对子可组成拖拉机。</p>
           <h3>叫分</h3>
           <ul>
             <li>叫分从 100 开始，按 5 分递减，最低 75。</li>
@@ -79,15 +77,16 @@
           </ul>
           <h3>出牌</h3>
           <ul>
-            <li>首家可出单张、对子、拖拉机或同花色组合。</li>
+            <li>首家只可出单张、对子、拖拉机，暂不允许甩牌。</li>
             <li>跟牌必须同张数；有首家花色时必须尽量跟足。</li>
             <li>有对子或拖拉机时，需按牌型义务跟出。</li>
           </ul>
+          <p>超时自动不叫或出合法牌；埋牌超时自动选 8 张低分牌，选主超时默认无主。断线后托管，重连恢复手动。</p>
           <h3>结算</h3>
           <ul>
             <li>闲家得分 ≥ 庄分：庄家下庄。</li>
             <li>闲家以主牌赢得最后一轮可抠底，底牌分按倍数计入。</li>
-            <li>清光（闲家 0 分）或边光（&lt;30 分）时庄家结算翻倍。</li>
+            <li>清光（闲家 0 分）为 3 倍；边光（1–29 分）为 2 倍。</li>
           </ul>
         </div>
       </div>
@@ -194,8 +193,10 @@
 
         <!-- 手牌区 -->
         <div class="hand-area">
+          <div class="hand-caption"><span>我的手牌 <small>点击选牌 · 再次点击取消</small></span><span id="selection-count">已选 0 张</span></div>
           <div id="my-hand" class="hand-cards"></div>
           <div class="hand-actions">
+            <button id="clear-selection-btn" class="btn btn-secondary">取消选择</button>
             <button id="play-btn" class="btn btn-primary hidden">出牌</button>
             <button id="ready-btn" class="btn btn-secondary">准备</button>
           </div>
@@ -225,7 +226,7 @@
         <div id="chat-box" class="chat-box">
           <div id="chat-messages" class="chat-messages"></div>
           <div class="chat-input-group">
-            <input type="text" id="chat-input" placeholder="说点什么…">
+            <input type="text" maxlength="300" aria-label="聊天消息" id="chat-input" placeholder="说点什么…">
             <button id="send-btn">发送</button>
           </div>
         </div>
@@ -244,6 +245,7 @@
 
   </div>
 
+  <div id="game-notice" class="game-notice hidden" role="status" aria-live="polite"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="game.js"></script>
 </body>

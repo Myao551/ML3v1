@@ -110,10 +110,11 @@ function sortCardsForDisplay(a, b, trumpSuit, isNoTrump) {
  */
 function sortCardsForInitialDeal(a, b) {
   /** @type {ValueMap} */
-  const rankOrder = { big: 100, small: 99, 2: 98, 7: 97, A: 14, K: 13, Q: 12, J: 11, 10: 10, 9: 9, 8: 8, 6: 6, 5: 5, 4: 4, 3: 3 };
+  const rankOrder = { big: 100, small: 99, 2: 97, 7: 98, A: 14, K: 13, Q: 12, J: 11, 10: 10, 9: 9, 8: 8, 6: 6, 5: 5, 4: 4, 3: 3 };
   /** @type {ValueMap} */
   const suitOrder = { spades: 4, hearts: 3, clubs: 2, diamonds: 1 };
 
+  if (a.rank === b.rank && a.suit === b.suit) return 0;
   if (a.rank === 'big') return -1;
   if (b.rank === 'big') return 1;
   if (a.rank === 'small') return -1;
@@ -145,9 +146,9 @@ function getCardValue(card, trumpSuit, isNoTrump) {
   if (card.rank === 'big') return 1000;
   if (card.rank === 'small') return 999;
   if (card.rank === '7' && card.suit === trumpSuit && !isNoTrump) return 998;
-  if (card.rank === '7') return 200 + (suitOrder[card.suit] || 0);
+  if (card.rank === '7') return 200;
   if (card.rank === '2' && card.suit === trumpSuit && !isNoTrump) return 197;
-  if (card.rank === '2') return 100 + (suitOrder[card.suit] || 0);
+  if (card.rank === '2') return 100;
 
   /** @type {ValueMap} */
   const rankValue = { A: 14, K: 13, Q: 12, J: 11, 10: 10, 9: 9, 8: 8, 7: 7, 6: 6, 5: 5, 4: 4, 3: 3 };

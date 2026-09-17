@@ -105,9 +105,9 @@ function getRankIndex(card, trumpSuit, isNoTrump) {
   const normalOrder = ['3', '4', '5', '6', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
   if (getEffectiveSuit(card, trumpSuit, isNoTrump) === 'trump') {
-    if (card.rank === 'big') return 16;
-    if (card.rank === 'small') return 15;
-    if (card.rank === '7') return !isNoTrump && card.suit === trumpSuit ? 14 : 13;
+    if (card.rank === 'big') return isNoTrump ? 14 : 16;
+    if (card.rank === 'small') return isNoTrump ? 13 : 15;
+    if (card.rank === '7') return isNoTrump ? 12 : (card.suit === trumpSuit ? 14 : 13);
     if (card.rank === '2') return !isNoTrump && card.suit === trumpSuit ? 12 : 11;
     return normalOrder.indexOf(card.rank);
   }
@@ -160,7 +160,10 @@ function findLongestTractor(pairGroups) {
   /** @type {PairGroup[]} */
   let current = [];
 
-  for (const group of pairGroups) {
+  // Equal-rank side trumps are alternatives, not a break in adjacency.
+  const byRank = new Map();
+  for (const group of pairGroups) if (!byRank.has(group.rankIndex)) byRank.set(group.rankIndex, group);
+  for (const group of [...byRank.values()].sort((a, b) => a.rankIndex - b.rankIndex)) {
     const previous = current[current.length - 1];
     current = !previous || group.rankIndex === previous.rankIndex + 1 ? [...current, group] : [group];
     if (current.length > best.length) best = [...current];
@@ -325,76 +328,94 @@ function validatePlay(room, cards, playerIndex) {
     return { valid: false, message: '请选择要出的牌' };
   }
 
-  const selectedIds = new Set();
-  for (const card of cards) {
-    if (!card || selectedIds.has(card.id) || !player.hand.some((/** @type {Card} */ candidate) => candidate.id === card.id)) {
-      return { valid: false, message: '所选牌无效或不在手牌中' };
-    }
-    selectedIds.add(card.id);
-  }
+  const canonical = resolveCards(player.hand, cards);
+  if (!canonical) return { valid: false, message: '所选牌无效或不在手牌中' };
+  cards = canonical;
 
   if (room.currentRound.length === 0) {
-    return analyzePlay(cards, room.trumpSuit, room.isNoTrump).valid
+    const analysis = analyzePlay(cards, room.trumpSuit, room.isNoTrump);
+    return analysis.valid && analysis.type !== 'throw'
       ? { valid: true }
-      : { valid: false, message: '出牌组合无效' };
+      : { valid: false, message: '暂不支持甩牌，请出单张、对子或拖拉机' };
   }
-
   const firstPlay = room.currentRound[0];
-  const leadAnalysis = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
-  if (!leadAnalysis.valid || cards.length !== leadAnalysis.length) {
+  const lead = analyzePlay(firstPlay.cards, room.trumpSuit, room.isNoTrump);
+  if (!lead.valid || cards.length !== lead.length) {
     return { valid: false, message: `本轮需要出 ${firstPlay.cards.length} 张牌` };
   }
-
-  const leadFollowSuit = getFollowSuitKey(firstPlay.cards, room.trumpSuit, room.isNoTrump);
-  const leadSuitInHand = countFollowSuit(player.hand, leadFollowSuit, room.trumpSuit, room.isNoTrump);
-  const requiredFollowCount = Math.min(leadAnalysis.length || 0, leadSuitInHand);
-  const playedLeadSuitCount = countFollowSuit(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
-  if (playedLeadSuitCount < requiredFollowCount) {
+  const suitedHand = getFollowSuitCards(player.hand, lead.suit || '', room.trumpSuit, room.isNoTrump);
+  const suitedPlay = getFollowSuitCards(cards, lead.suit || '', room.trumpSuit, room.isNoTrump);
+  if (suitedPlay.length !== Math.min(cards.length, suitedHand.length)) {
     return { valid: false, message: '有同花色时必须跟牌' };
   }
-
-  const playedLeadSuitCards = getFollowSuitCards(cards, leadFollowSuit, room.trumpSuit, room.isNoTrump);
-  const followedLeadSuit = playedLeadSuitCount > 0;
-  const allPlayedTrump = cards.every(card => getEffectiveSuit(card, room.trumpSuit, room.isNoTrump) === 'trump');
-  const isTrumpKill = !followedLeadSuit && allPlayedTrump && leadAnalysis.suit !== 'trump';
-
-  if (followedLeadSuit || isTrumpKill) {
-    const obligationSuit = followedLeadSuit ? leadFollowSuit : 'trump';
-    const structureCards = followedLeadSuit ? playedLeadSuitCards : cards;
-    const structureAnalysis = analyzePlay(structureCards, room.trumpSuit, room.isNoTrump);
-    const obligationSuitInHand = followedLeadSuit
-      ? countFollowSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)
-      : countEffectiveSuit(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
-    const hasObligationTractor = followedLeadSuit
-      ? followSuitHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength)
-      : handHasTractor(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump, leadAnalysis.tractorLength);
-    const hasObligationPair = followedLeadSuit
-      ? followSuitHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump)
-      : handHasPair(player.hand, obligationSuit, room.trumpSuit, room.isNoTrump);
-
-    if (leadAnalysis.type === 'tractor' || (leadAnalysis.tractorLength || 0) >= 2) {
-      if (obligationSuitInHand >= (leadAnalysis.tractorLength || 0) * 2 && hasObligationTractor) {
-        return structureAnalysis.valid && structureAnalysis.type === 'tractor' && structureAnalysis.tractorLength === leadAnalysis.tractorLength
-          ? { valid: true }
-          : { valid: false, message: '必须用同花色拖拉机跟牌' };
-      }
-      if (obligationSuitInHand >= 2 && hasObligationPair) {
-        return structureAnalysis.valid && (structureAnalysis.pairCount || 0) > 0
-          ? { valid: true }
-          : { valid: false, message: '必须用同花色对子跟牌' };
-      }
-    }
-
-    if ((leadAnalysis.type === 'pair' || (leadAnalysis.pairCount || 0) > 0) &&
-        obligationSuitInHand >= 2 &&
-        hasObligationPair) {
-      return structureAnalysis.valid && (structureAnalysis.pairCount || 0) > 0
-        ? { valid: true }
-        : { valid: false, message: '必须跟对子' };
+  // When short of the led suit, all available cards in that suit must be used.
+  // When void, any discard is legal; only a matching trump structure can win.
+  if (suitedHand.length < cards.length || lead.type === 'single') return { valid: true };
+  const handPairs = getPairGroups(suitedHand, room.trumpSuit, room.isNoTrump);
+  const playedPairs = getPairGroups(suitedPlay, room.trumpSuit, room.isNoTrump);
+  const requiredPairs = Math.min(cards.length / 2, handPairs.length);
+  if (playedPairs.length < requiredPairs) return { valid: false, message: `必须跟足 ${requiredPairs} 对同花色对子` };
+  if (lead.type === 'tractor') {
+    const requiredLength = Math.min(lead.tractorLength || 0, findLongestTractor(handPairs).length);
+    if (findLongestTractor(playedPairs).length < requiredLength) {
+      return { valid: false, message: `必须优先跟 ${requiredLength} 连对` };
     }
   }
-
   return { valid: true };
+}
+
+/** Resolve IDs against the authoritative hand; never trust submitted faces.
+ * @param {Card[]} hand
+ * @param {any} submitted
+ * @returns {Card[] | null}
+ */
+function resolveCards(hand, submitted) {
+  if (!Array.isArray(submitted) || submitted.length === 0 || submitted.length > hand.length) return null;
+  const byId = new Map(hand.map(card => [card.id, card]));
+  const seen = new Set();
+  const result = [];
+  for (const item of submitted) {
+    const id = typeof item === 'string' ? item : item?.id;
+    if (typeof id !== 'string' || seen.has(id) || !byId.has(id)) return null;
+    seen.add(id);
+    result.push(/** @type {Card} */ (byId.get(id)));
+  }
+  return result;
+}
+
+/** Deterministic legal fallback. Prefer low cards; preserve required pairs/runs.
+ * @param {any} room
+ * @param {number} playerIndex
+ * @returns {Card[]}
+ */
+function getAutoPlay(room, playerIndex) {
+  const hand = [...room.players[playerIndex].hand].sort((a, b) => getCardValue(a, room.trumpSuit, room.isNoTrump) - getCardValue(b, room.trumpSuit, room.isNoTrump));
+  if (!room.currentRound.length) return hand.slice(0, 1);
+  const lead = analyzePlay(room.currentRound[0].cards, room.trumpSuit, room.isNoTrump);
+  const count = lead.length || 1;
+  const suited = getFollowSuitCards(hand, lead.suit || '', room.trumpSuit, room.isNoTrump);
+  /** @type {Card[]} */
+  const chosen = [];
+  if (suited.length >= count && lead.type !== 'single') {
+    const pairs = getPairGroups(suited, room.trumpSuit, room.isNoTrump);
+    if (lead.type === 'tractor') {
+      const chain = findLongestTractor(pairs).slice(0, lead.tractorLength);
+      if (chain.length >= 2) chosen.push(...chain.flatMap(group => group.cards));
+    }
+    for (const pair of pairs) {
+      if (chosen.length + 2 > count) break;
+      if (!chosen.some(card => card.id === pair.cards[0].id)) chosen.push(...pair.cards);
+    }
+  }
+  for (const card of suited) {
+    if (chosen.length >= count) break;
+    if (!chosen.some(item => item.id === card.id)) chosen.push(card);
+  }
+  for (const card of hand) {
+    if (chosen.length >= count) break;
+    if (!chosen.some(item => item.id === card.id)) chosen.push(card);
+  }
+  return chosen;
 }
 
 module.exports = {
@@ -403,5 +424,7 @@ module.exports = {
   getBottomMultiplier,
   getEffectiveSuit,
   isTrumpCard,
-  validatePlay
+  validatePlay,
+  resolveCards,
+  getAutoPlay
 };

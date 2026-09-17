@@ -17,6 +17,7 @@ const {
  *   rooms: Map<string, any>;
  *   getRoomState(room: any): any;
  *   startGame(room: any): void;
+ *   scheduleTurn(room: any): void;
  * }} RoomLifecycleDeps
  */
 
@@ -49,6 +50,15 @@ function attachSocketToPlayer(socket, room, player) {
     player.disconnectTimer = null;
   }
 
+  const previous = socket.nsp?.sockets.get(player.id);
+  if (previous && previous.id !== socket.id) {
+    previous.leave(room.id);
+    /** @type {any} */ (previous).roomId = null;
+    previous.emit('session-replaced');
+    previous.disconnect(true);
+  }
+  clearTimeout(room.cleanupTimer);
+  room.cleanupTimer = null;
   player.id = socket.id;
   player.disconnected = false;
   socket.join(room.id);
@@ -113,8 +123,10 @@ function sendPrivateState(socket, room, player, getRoomState) {
 /**
  * @param {RoomLifecycleDeps} deps
  */
-function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGame }) {
+function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGame, scheduleTurn }) {
   socket.on('create-room', (playerPayload, callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    if (socket.roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
     const playerName = normalizePlayerName(playerPayload?.name);
     const sessionId = normalizeSessionId(playerPayload?.sessionId);
     if (!playerName) {
@@ -150,6 +162,8 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
   });
 
   socket.on('join-room', (roomId, playerPayload, callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    if (socket.roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
     const playerName = normalizePlayerName(playerPayload?.name);
     const sessionId = normalizeSessionId(playerPayload?.sessionId);
     const room = rooms.get(String(roomId || ''));
@@ -171,6 +185,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
       callback({ success: true, roomId, playerId: socket.id, sessionId: existingPlayer.sessionId, rejoined: true });
       io.to(room.id).emit('room-update', getRoomState(room));
       sendPrivateState(socket, room, existingPlayer, getRoomState);
+      scheduleTurn(room);
       return;
     }
 
@@ -211,6 +226,8 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
   });
 
   socket.on('rejoin-room', (data, callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    if (socket.roomId && socket.roomId !== data?.roomId) { callback({ success: false }); return; }
     const roomId = data?.roomId;
     const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : null;
     const room = rooms.get(roomId);
@@ -230,13 +247,15 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     callback({ success: true, roomId, playerId: socket.id, sessionId });
     io.to(room.id).emit('room-update', getRoomState(room));
     sendPrivateState(socket, room, player, getRoomState);
+    scheduleTurn(room);
   });
 
   socket.on('player-ready', (isReady) => {
+    if (typeof isReady !== 'boolean') return;
     if (!socket.roomId) return;
 
     const room = rooms.get(socket.roomId);
-    if (!room) return;
+    if (!room || room.state !== 'waiting') return;
 
     const player = room.players.find((/** @type {any} */ candidate) => candidate.id === socket.id);
     if (!player) return;
@@ -244,7 +263,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     player.isReady = isReady;
     io.to(room.id).emit('room-update', getRoomState(room));
 
-    if (room.players.length === 4 && room.players.every((/** @type {any} */ candidate) => candidate.isReady)) {
+    if (room.players.length === 4 && room.players.every((/** @type {any} */ candidate) => candidate.isReady && !candidate.disconnected)) {
       startGame(room);
     }
   });
@@ -256,7 +275,9 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     if (!room) return;
 
     const player = room.players.find((/** @type {any} */ candidate) => candidate.id === socket.id);
-    const cleanMessage = String(message || '').trim().slice(0, 300);
+    if (!player || Date.now() - (player.lastChatAt || 0) < 500 || typeof message !== 'string') return;
+    player.lastChatAt = Date.now();
+    const cleanMessage = message.trim().slice(0, 300);
     if (player && cleanMessage) {
       io.to(room.id).emit('chat-message', {
         player: player.name,
@@ -276,9 +297,21 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
 
     const player = room.players[playerIndex];
     player.disconnected = true;
+    player.disconnectedAt = Date.now();
+    scheduleTurn(room);
+    if (room.players.every((/** @type {any} */ candidate) => candidate.disconnected)) {
+      clearTimeout(room.cleanupTimer);
+      room.cleanupTimer = setTimeout(() => {
+        if (!room.players.every((/** @type {any} */ candidate) => candidate.disconnected)) return;
+        clearTimeout(room.turnTimer);
+        clearTimeout(room.roundTimer);
+        room.players.forEach((/** @type {any} */ candidate) => clearTimeout(candidate.disconnectTimer));
+        rooms.delete(room.id);
+      }, 10 * 60 * 1000);
+    }
     io.to(room.id).emit('room-update', getRoomState(room));
 
-    player.disconnectTimer = setTimeout(() => {
+    const removeDisconnected = () => {
       const currentRoom = rooms.get(room.id);
       if (!currentRoom) return;
 
@@ -288,7 +321,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
       if (currentIndex === -1) return;
 
       if (currentRoom.state !== 'waiting') {
-        io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
+        player.disconnectTimer = setTimeout(removeDisconnected, 60000);
         return;
       }
 
@@ -302,7 +335,8 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
 
       io.to(currentRoom.id).emit('player-left', { playerId: socket.id });
       io.to(currentRoom.id).emit('room-update', getRoomState(currentRoom));
-    }, 60000);
+    };
+    player.disconnectTimer = setTimeout(removeDisconnected, 60000);
   });
 }
 
