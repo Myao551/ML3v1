@@ -16,6 +16,7 @@ function getRoomState(room) {
       isDealer: player.isDealer,
       settlementScore: player.settlementScore || 0,
       disconnected: !!player.disconnected,
+      leftRoom: !!player.leftRoom,
       cardCount: player.hand.length
     })),
     settlementSettings: room.settlementSettings,
@@ -52,6 +53,7 @@ function resetRoomForNextGame(room) {
   room.turnKey = null;
   room.state = 'waiting';
   room.gameNumber += 1;
+  removeWaitingPlayers(room, (player) => !!player.leftRoom);
   room.players.forEach((/** @type {any} */ player) => {
     player.isDealer = false;
     player.isReady = false;
@@ -80,7 +82,33 @@ function resetRoomForNextGame(room) {
   room.earlyFinishOffered = false;
 }
 
+/**
+ * Remove seats only between games, preserving the next bidder by identity.
+ * @param {any} room
+ * @param {(player: any) => boolean} shouldRemove
+ */
+function removeWaitingPlayers(room, shouldRemove) {
+  const previous = room.players;
+  const start = (room.nextBidder || 0) % (previous.length || 1);
+  room.players = previous.filter((/** @type {any} */ player) => {
+    if (!shouldRemove(player)) return true;
+    clearTimeout(player.disconnectTimer);
+    player.disconnectTimer = null;
+    return false;
+  });
+  let nextPlayer;
+  for (let offset = 0; offset < previous.length; offset += 1) {
+    const candidate = previous[(start + offset) % previous.length];
+    if (room.players.includes(candidate)) { nextPlayer = candidate; break; }
+  }
+  room.players.forEach((/** @type {any} */ player, /** @type {number} */ seat) => { player.seat = seat; });
+  room.nextBidder = Math.max(0, room.players.indexOf(nextPlayer));
+  room.currentBidder = room.nextBidder;
+  room.currentPlayer = room.nextBidder;
+}
+
 module.exports = {
   getRoomState,
+  removeWaitingPlayers,
   resetRoomForNextGame
 };

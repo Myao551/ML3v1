@@ -5,10 +5,11 @@ const {
   createRoom,
   normalizeSettlementSettings
 } = require('../game/rooms');
+const { removeWaitingPlayers } = require('../game/room-state');
 
 /** @typedef {import('socket.io').Server} SocketServer */
 /** @typedef {import('socket.io').Socket} Socket */
-/** @typedef {Socket & { roomId?: string; playerId?: string; sessionId?: string }} GameSocket */
+/** @typedef {Socket & { roomId?: string | null; playerId?: string | null; sessionId?: string | null }} GameSocket */
 
 /**
  * @typedef {{
@@ -124,6 +125,24 @@ function sendPrivateState(socket, room, player, getRoomState) {
  * @param {RoomLifecycleDeps} deps
  */
 function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGame, scheduleTurn }) {
+  /** @param {any} room */
+  function deleteRoom(room) {
+    clearTimeout(room.cleanupTimer);
+    clearTimeout(room.turnTimer);
+    clearTimeout(room.roundTimer);
+    room.players.forEach((/** @type {any} */ player) => clearTimeout(player.disconnectTimer));
+    rooms.delete(room.id);
+  }
+
+  /** @param {any} room */
+  function scheduleEmptyRoomCleanup(room) {
+    if (!room.players.every((/** @type {any} */ player) => player.disconnected)) return;
+    clearTimeout(room.cleanupTimer);
+    room.cleanupTimer = setTimeout(() => {
+      if (rooms.get(room.id) === room && room.players.every((/** @type {any} */ player) => player.disconnected)) deleteRoom(room);
+    }, 10 * 60 * 1000);
+  }
+
   socket.on('create-room', (playerPayload, callback = () => {}) => {
     if (typeof callback !== 'function') return;
     if (socket.roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
@@ -179,6 +198,10 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     }
 
     const existingPlayer = room.players.find((/** @type {any} */ player) => player.sessionId === sessionId);
+    if (existingPlayer?.leftRoom) {
+      callback({ success: false, error: '你已退出本局，请等本局结束后再加入此房间' });
+      return;
+    }
     if (existingPlayer) {
       existingPlayer.name = playerName;
       attachSocketToPlayer(socket, room, existingPlayer);
@@ -238,7 +261,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     }
 
     const player = room.players.find((/** @type {any} */ candidate) => candidate.sessionId === sessionId);
-    if (!player) {
+    if (!player || player.leftRoom) {
       callback({ success: false });
       return;
     }
@@ -248,6 +271,44 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     io.to(room.id).emit('room-update', getRoomState(room));
     sendPrivateState(socket, room, player, getRoomState);
     scheduleTurn(room);
+  });
+
+  socket.on('leave-room', (data, callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    if (!socket.roomId) { callback({ success: true }); return; }
+    if (socket.roomId !== data?.roomId) {
+      callback({ success: false, error: '房间已变更，请重试' });
+      return;
+    }
+    const room = rooms.get(socket.roomId);
+    const player = room?.players.find((/** @type {any} */ candidate) => candidate.id === socket.id);
+    socket.leave(socket.roomId);
+    socket.roomId = null;
+    socket.playerId = null;
+    socket.sessionId = null;
+
+    if (player) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+      if (room.state === 'waiting') {
+        removeWaitingPlayers(room, (candidate) => candidate === player);
+      } else {
+        player.leftRoom = true;
+        player.disconnected = true;
+        player.isReady = false;
+        // Private game events must never reach this socket in its next room.
+        player.id = `left-${uuidv4()}`;
+      }
+      if (room.players.every((/** @type {any} */ candidate) => candidate.leftRoom)) {
+        deleteRoom(room);
+      } else {
+        scheduleTurn(room);
+        scheduleEmptyRoomCleanup(room);
+        io.to(room.id).emit('player-left', { playerId: socket.id });
+        io.to(room.id).emit('room-update', getRoomState(room));
+      }
+    }
+    callback({ success: true });
   });
 
   socket.on('player-ready', (isReady) => {
@@ -299,16 +360,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     player.disconnected = true;
     player.disconnectedAt = Date.now();
     scheduleTurn(room);
-    if (room.players.every((/** @type {any} */ candidate) => candidate.disconnected)) {
-      clearTimeout(room.cleanupTimer);
-      room.cleanupTimer = setTimeout(() => {
-        if (!room.players.every((/** @type {any} */ candidate) => candidate.disconnected)) return;
-        clearTimeout(room.turnTimer);
-        clearTimeout(room.roundTimer);
-        room.players.forEach((/** @type {any} */ candidate) => clearTimeout(candidate.disconnectTimer));
-        rooms.delete(room.id);
-      }, 10 * 60 * 1000);
-    }
+    scheduleEmptyRoomCleanup(room);
     io.to(room.id).emit('room-update', getRoomState(room));
 
     const removeDisconnected = () => {
@@ -325,11 +377,10 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
         return;
       }
 
-      currentRoom.players.splice(currentIndex, 1);
-      currentRoom.players.forEach((/** @type {any} */ candidate, /** @type {number} */ seat) => { candidate.seat = seat; });
+      removeWaitingPlayers(currentRoom, (candidate) => candidate === currentRoom.players[currentIndex]);
 
       if (currentRoom.players.length === 0) {
-        rooms.delete(room.id);
+        deleteRoom(currentRoom);
         return;
       }
 

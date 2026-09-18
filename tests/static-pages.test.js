@@ -26,3 +26,12 @@ test('room entry is available without login or registration screens', () => {
   assert.match(homeScreen, /id="player-name"/);
   assert.match(html, /<script type="module" src="game\.js"><\/script>/);
 });
+
+test('room and result screens offer exit with an accessible confirmation dialog', () => {
+  assert.match(html, /id="leave-room-btn"[^>]*aria-label="退出房间"/);
+  assert.match(html, /id="result-leave-btn"/);
+  assert.match(html, /id="leave-room-modal"[^>]*role="dialog"[^>]*aria-modal="true"/);
+  assert.match(html, /id="cancel-leave-btn"/);
+  assert.match(html, /id="confirm-leave-btn"/);
+  assert.ok(fs.existsSync(path.join(__dirname, '../public/assets/icons/log-out.svg')));
+});

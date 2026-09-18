@@ -179,6 +179,104 @@ test('scheduled round settlement cannot run after early finish reset', () => {
   assert.equal(room.state, 'waiting');
 });
 
+test('waiting leave releases a seat, preserves the next bidder and permits another room', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  room.nextBidder = 2;
+  h.run(`resetRoomForNextGame(rooms.get('${room.id}'))`);
+  players[1].send('leave-room', { roomId: room.id }, response => assert.equal(response.success, true));
+  assert.equal(players[1].roomId, null);
+  assert.equal(room.players.map(p => p.seat).join(','), '0,1,2');
+  assert.equal(room.players[room.nextBidder].sessionId, 's2');
+  assert.equal(room.currentBidder, 1);
+  players[1].send('create-room', { name: 'P1', sessionId: 's1' }, response => assert.equal(response.success, true));
+  const newRoomId = players[1].roomId;
+  players[1].send('leave-room', { roomId: room.id }, response => assert.equal(response.success, false));
+  assert.equal(players[1].roomId, newRoomId);
+  const replacement = h.connect('replacement');
+  replacement.send('join-room', room.id, { name: 'New', sessionId: 'new' }, response => assert.equal(response.success, true));
+  assert.equal(room.players.length, 4);
+});
+
+test('leaving the final waiting seat deletes the room and all timers; leave is idempotent', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  h.run(`resetRoomForNextGame(rooms.get('${room.id}'))`);
+  players.forEach(socket => socket.send('leave-room', { roomId: room.id }, response => assert.equal(response.success, true)));
+  assert.equal(h.rooms.size, 0);
+  assert.equal(h.timers.size, 0);
+  players[0].send('leave-room', { roomId: room.id }, response => assert.equal(response.success, true));
+});
+
+test('active leave preserves seats, uses autoplay and never sends private cards to a new room', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[0].send('place-bid', 75);
+  const handBefore = JSON.stringify(room.players[0].hand);
+  players[0].send('leave-room', { roomId: room.id }, response => assert.equal(response.success, true));
+  assert.equal(room.players.length, 4);
+  assert.equal(JSON.stringify(room.players[0].hand), handBefore);
+  assert.equal(getRoomState(room).players[0].leftRoom, true);
+  assert.equal(h.timers.get(room.turnTimer).delay, 2000);
+  assert.notEqual(room.players[0].id, players[0].id);
+  players[0].send('finish-exchange', room.players[0].hand.slice(0, 8));
+  assert.equal(room.state, 'exchanging');
+  players[0].send('create-room', { name: 'P0', sessionId: 's0' }, response => assert.equal(response.success, true));
+  const start = h.broadcasts.length;
+  h.fire(room.turnTimer);
+  assert.equal(room.state, 'choosing-trump');
+  h.fire(room.turnTimer);
+  assert.equal(room.state, 'playing');
+  assert.equal(h.broadcasts.slice(start).some(event => event.target === players[0].id), false);
+  let steps = 0;
+  while (room.state === 'playing' && steps++ < 150) h.fire(room.roundResolving ? room.roundTimer : room.turnTimer);
+  assert.equal(room.state, 'waiting');
+  assert.equal(room.players.length, 3);
+  assert.equal(room.players.map(p => p.sessionId).join(','), 's1,s2,s3');
+  const ending = h.broadcasts.filter(event => event.event === 'game-end').at(-1).payload;
+  assert.equal(ending.settlement.deltas.length, 4);
+  assert.equal(h.rooms.size, 2);
+});
+
+test('explicit leavers cannot resume mid-game and all-pass cleanup advances to a remaining bidder', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[0].send('leave-room', { roomId: room.id }, () => {});
+  const replacement = h.connect('replacement');
+  replacement.send('rejoin-room', { roomId: room.id, sessionId: 's0' }, response => assert.equal(response.success, false));
+  replacement.send('join-room', room.id, { name: 'P0', sessionId: 's0' }, response => assert.equal(response.success, false));
+  h.fire(room.turnTimer);
+  players.slice(1).forEach(socket => socket.send('place-bid', 'pass'));
+  assert.equal(room.state, 'waiting');
+  assert.equal(room.players.length, 3);
+  assert.equal(room.players[room.nextBidder].sessionId, 's1');
+  replacement.send('join-room', room.id, { name: 'P0', sessionId: 's0' }, response => assert.equal(response.success, true));
+  assert.equal(room.players.length, 4);
+});
+
+test('all active players leaving deletes the room including pending round settlement', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[0].send('place-bid', 75);
+  h.fire(room.turnTimer); h.fire(room.turnTimer);
+  for (let i = 0; i < 4; i++) players[room.currentPlayer].send('play-cards', getAutoPlay(room, room.currentPlayer));
+  assert.ok(room.roundTimer);
+  const staleTurn = h.timers.get(room.roundTimer).fn;
+  players.forEach(socket => socket.send('leave-room', { roomId: room.id }, () => {}));
+  assert.equal(h.rooms.size, 0);
+  assert.equal(h.timers.size, 0);
+  assert.doesNotThrow(staleTurn);
+});
+
+test('leaving after peers disconnect retains their reconnect window but cleans up empty rooms', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players.slice(1).forEach(socket => socket.disconnect());
+  players[0].send('leave-room', { roomId: room.id }, () => {});
+  assert.ok(h.timers.has(room.cleanupTimer));
+  const replacement = h.connect('replacement');
+  replacement.send('rejoin-room', { roomId: room.id, sessionId: 's1' }, response => assert.equal(response.success, true));
+  assert.equal(room.cleanupTimer, null);
+  replacement.disconnect();
+  h.fire(room.cleanupTimer);
+  assert.equal(h.rooms.size, 0);
+  assert.equal(h.timers.size, 0);
+});
+
 test('dealer win retains first bid, dealer loss rotates it', () => {
   const h = harness(); const { room } = h.fourPlayers();
   room.dealer = 2; room.dealerScore = 100; room.scores.team = 20;
@@ -213,6 +311,81 @@ test('disconnect shortens turn to 2 seconds, reconnect keeps deadline without ex
   assert.equal(room.deadline, deadline);
 });
 
+for (const phase of ['waiting', 'bidding', 'exchanging', 'choosing-trump', 'playing', 'round-resolving']) {
+  test(`reconnect restores all four seats in ${phase} without redealing or leaking private cards`, () => {
+    const h = harness(); const { players, room } = h.fourPlayers();
+    if (phase === 'waiting') h.run(`resetRoomForNextGame(rooms.get('${room.id}'))`);
+    if (!['waiting', 'bidding'].includes(phase)) players[0].send('place-bid', 75);
+    if (['choosing-trump', 'playing', 'round-resolving'].includes(phase)) h.fire(room.turnTimer);
+    if (['playing', 'round-resolving'].includes(phase)) h.fire(room.turnTimer);
+    if (phase === 'playing') {
+      players[0].send('play-cards', getAutoPlay(room, 0));
+      room.earlyFinishOffered = true; room.earlyFinishVotes.add(2);
+    }
+    if (phase === 'round-resolving') {
+      for (let i = 0; i < 4; i++) players[room.currentPlayer].send('play-cards', getAutoPlay(room, room.currentPlayer));
+    }
+    const expectedHands = JSON.stringify(room.players.map(player => player.hand));
+    for (let index = 0; index < 4; index += 1) {
+      players[index].disconnect();
+      const removalTimer = room.players[index].disconnectTimer;
+      const deadline = room.deadline;
+      const fresh = h.connect(`restored-${index}`);
+      fresh.send('rejoin-room', { roomId: room.id, sessionId: `s${index}` }, response => {
+        assert.equal(response.success, true);
+        assert.equal(response.playerId, fresh.id);
+      });
+      assert.equal(room.players.length, 4);
+      assert.equal(room.players[index].seat, index);
+      assert.equal(room.players[index].disconnected, false);
+      assert.equal(h.timers.has(removalTimer), false);
+      assert.equal(room.deadline, deadline);
+      assert.equal(JSON.stringify(room.players.map(player => player.hand)), expectedHands);
+      const snapshot = fresh.events.find(event => event.event === 'room-update').data;
+      assert.equal(snapshot.state, room.state);
+      assert.equal(JSON.stringify(snapshot.currentRound), JSON.stringify(room.currentRound));
+      assert.equal(snapshot.players.some(player => 'hand' in player || 'sessionId' in player), false);
+      const hand = fresh.events.find(event => event.event === 'hand-sorted');
+      if (phase !== 'waiting') assert.equal(JSON.stringify(hand.data), JSON.stringify(room.players[index].hand));
+      const hasEvent = name => fresh.events.some(event => event.event === name);
+      assert.equal(hasEvent('exchange-cards'), phase === 'exchanging' && index === 0);
+      assert.equal(hasEvent('choose-trump-request'), phase === 'choosing-trump' && index === 0);
+      if (phase === 'bidding') assert.ok(hasEvent('bid-update'));
+      if (phase === 'playing') assert.equal(snapshot.earlyFinishVoters.join(','), '2');
+      if (phase === 'round-resolving') assert.equal(snapshot.roundResolving, true);
+    }
+  });
+}
+
+test('waiting disconnect expires after 60 seconds but an active seat survives that timeout', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[1].disconnect();
+  h.fire(room.players[1].disconnectTimer);
+  assert.equal(room.players.length, 4);
+  assert.ok(h.timers.has(room.players[1].disconnectTimer));
+  h.run(`resetRoomForNextGame(rooms.get('${room.id}'))`);
+  h.fire(room.players[1].disconnectTimer);
+  assert.equal(room.players.length, 3);
+  assert.equal(room.players.some(player => player.sessionId === 's1'), false);
+  const replacement = h.connect('expired');
+  replacement.send('rejoin-room', { roomId: room.id, sessionId: 's1' }, response => assert.equal(response.success, false));
+});
+
+test('refresh join restores a full active room by session and rejects unknown sessions', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[2].disconnect();
+  const fresh = h.connect('refresh');
+  fresh.send('join-room', room.id, { name: 'P2', sessionId: 's2' }, response => {
+    assert.equal(response.success, true); assert.equal(response.rejoined, true);
+  });
+  assert.equal(room.players.length, 4);
+  assert.equal(room.players[2].id, fresh.id);
+  const stranger = h.connect('stranger');
+  stranger.send('rejoin-room', { roomId: room.id, sessionId: 'unknown' }, response => assert.equal(response.success, false));
+  stranger.send('rejoin-room', { roomId: 'missing', sessionId: 's2' }, response => assert.equal(response.success, false));
+  assert.equal(stranger.events.some(event => event.event === 'hand-sorted'), false);
+});
+
 test('seeded legal fallback property: valid unique cards and preserved hand across 1000 cases', () => {
   let seed = 7343; const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
   const deck = createDeck();
@@ -230,7 +403,12 @@ test('seeded legal fallback property: valid unique cards and preserved hand acro
 
 function frontendHarness() {
   class Element {
-    constructor() { this.children=[]; this.dataset={}; this.style={}; this._html=''; this.textContent=''; this.classList={ add(){},remove(){},toggle(){} }; }
+    constructor() {
+      this.children=[]; this.dataset={}; this.style={}; this._html=''; this.textContent=''; this.value='';
+      const classes = new Set();
+      this.classList={ add(...names){names.forEach(name=>classes.add(name));},remove(...names){names.forEach(name=>classes.delete(name));},
+        contains(name){return classes.has(name);},toggle(name,force){if(force ?? !classes.has(name))classes.add(name);else classes.delete(name);} };
+    }
     set innerHTML(value) { this._html=value; this.children=[]; }
     get innerHTML() { return this._html || String(this.textContent).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
     appendChild(node) { this.children.push(node); return node; }
@@ -238,18 +416,103 @@ function frontendHarness() {
     querySelector() { return new Element(); }
     querySelectorAll() { return []; }
     addEventListener() {}
+    focus() { this.focused = true; }
     setAttribute(name, value) { this[name] = String(value); }
     remove() {}
   }
   const nodes=new Map(); const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
-  const handlers={}; const timers=[];
-  const socket={connected:true,on(name,fn){handlers[name]=fn;},emit(){}};
+  const handlers={}; const timers=[]; const emissions=[]; const storage=new Map();
+  const socket={connected:true,on(name,fn){handlers[name]=fn;},emit(...args){emissions.push(args);},timeout(){return this;},
+    removeAllListeners(){Object.keys(handlers).forEach(name=>delete handlers[name]);},disconnect(){this.connected=false;}};
+  const location = { href: 'http://localhost/?room=old&theme=bright', toString(){return this.href;} };
   const ctx=vm.createContext({console:{log(){}},document:{getElementById:get,querySelector:()=>new Element(),querySelectorAll:()=>[],createElement:()=>new Element(),addEventListener(){}},
-    io:()=>socket,setTimeout(fn){timers.push(fn);return timers.length;},clearTimeout(){},setInterval(){},clearInterval(){},localStorage:{getItem(){return null;},setItem(){}},Date});
+    io:()=>socket,setTimeout(fn){timers.push(fn);return timers.length;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},
+    localStorage:{getItem(key){return storage.get(key) ?? null;},setItem(key,value){storage.set(key,value);},removeItem(key){storage.delete(key);}},
+    URL,window:{location,history:{replaceState(_state,_title,url){location.href=String(url);}}},Date});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/game.js'),'utf8'),ctx);
   vm.runInContext("connectSocket(); gameState.players = [{name:'玩家',isDealer:false}]; gameState.seat = 0;",ctx);
-  return {nodes,get,handlers,timers,run(code){return vm.runInContext(code,ctx);}};
+  return {nodes,get,handlers,timers,socket,emissions,storage,location,run(code){return vm.runInContext(code,ctx);}};
 }
+
+test('client confirms leave then resets room state, storage, URL, socket and panels', () => {
+  const h = frontendHarness();
+  h.storage.set('sanda1-last-room', 'old'); h.storage.set('sanda1-player-name', 'Player');
+  h.run("gameState.roomId='old'; gameState.sessionId='session'; gameState.playerName='Player'; gameState.hand=[{id:'card'}]; gameState.playHistory=[{}]; gameState.currentState='playing'; gameState.isExchanging=true; gameState.countdownTimer=1; elements.resultModal.classList.remove('hidden'); requestLeaveRoom();");
+  assert.equal(h.emissions.length, 0);
+  assert.match(h.get('leave-room-message').textContent, /托管/);
+  h.run('cancelLeaveRoom();');
+  assert.equal(h.run('gameState.roomId'), 'old');
+  h.run('requestLeaveRoom(); leaveRoom(); leaveRoom();');
+  assert.equal(h.emissions.length, 1);
+  const [event, payload, ack] = h.emissions[0];
+  assert.equal(event, 'leave-room'); assert.equal(payload.roomId, 'old');
+  assert.equal(h.run('gameState.roomId'), 'old');
+  ack(null, { success: true });
+  assert.equal(h.run('gameState.roomId'), null);
+  assert.equal(h.run('gameState.socket'), null);
+  assert.equal(h.socket.connected, false);
+  assert.equal(Object.keys(h.handlers).length, 0);
+  assert.equal(h.storage.has('sanda1-last-room'), false);
+  assert.equal(h.storage.get('sanda1-player-name'), 'Player');
+  assert.equal(h.run('gameState.sessionId'), 'session');
+  assert.equal(h.run('gameState.hand.length + gameState.playHistory.length'), 0);
+  assert.equal(h.run('gameState.countdownTimer'), null);
+  assert.equal(h.run('gameState.isExchanging'), false);
+  assert.equal(h.location.href, 'http://localhost/?theme=bright');
+  assert.equal(h.get('home-screen').classList.contains('active'), true);
+  assert.equal(h.get('result-modal').classList.contains('hidden'), true);
+  assert.equal(h.get('leave-room-modal').classList.contains('hidden'), true);
+});
+
+test('client offline or timed-out leave never reports success and permits retry', () => {
+  const h = frontendHarness(); h.run("gameState.roomId='old';");
+  h.socket.connected = false; h.run('leaveRoom();');
+  assert.equal(h.emissions.length, 0);
+  assert.equal(h.run('gameState.roomId'), 'old');
+  h.socket.connected = true; h.run('leaveRoom();');
+  h.emissions[0][2](new Error('timeout'));
+  assert.equal(h.run('gameState.roomId'), 'old');
+  assert.equal(h.run('gameState.leavingRoom'), false);
+  h.run('leaveRoom();');
+  h.emissions[1][2](null, {success:true});
+  assert.equal(h.run('gameState.roomId'), null);
+});
+
+test('client reconnect sends the saved session and restores identity before the room snapshot', () => {
+  const h = frontendHarness();
+  h.run("gameState.roomId='old'; gameState.sessionId='session'; gameState.playerId='old-socket'; gameState.countdownTimer=1;");
+  h.handlers.disconnect();
+  assert.equal(h.get('play-btn').disabled, true);
+  assert.equal(h.run('gameState.countdownTimer'), null);
+  h.handlers.connect();
+  const [event, data, ack] = h.emissions.at(-1);
+  assert.equal(event, 'rejoin-room'); assert.equal(data.sessionId, 'session'); assert.equal(data.roomId, 'old');
+  ack({success:true, playerId:'restored'});
+  assert.equal(h.run('gameState.playerId'), 'restored');
+  assert.equal(h.run('gameState.roomId'), 'old');
+});
+
+test('failed reconnect clears stale UI; replaced sessions preserve the new window recovery record', () => {
+  for (const replaced of [false, true]) {
+    const h = frontendHarness();
+    h.run("gameState.roomId='old'; gameState.sessionId='session'; gameState.hand=[{id:'old-card'}];");
+    h.storage.set('sanda1-last-room', 'old');
+    if (replaced) h.handlers['session-replaced']();
+    else { h.handlers.connect(); h.emissions.at(-1)[2]({success:false}); }
+    assert.equal(h.run('gameState.roomId'), null);
+    assert.equal(h.run('gameState.hand.length'), 0);
+    assert.equal(h.storage.has('sanda1-last-room'), replaced);
+    assert.equal(h.get('home-screen').classList.contains('active'), true);
+    assert.equal(h.location.href, 'http://localhost/?theme=bright');
+  }
+});
+
+test('leaving an old window does not delete a different window room record', () => {
+  const h = frontendHarness();
+  h.run("gameState.roomId='old';"); h.storage.set('sanda1-last-room', 'another-room');
+  h.run('returnToLobby();');
+  assert.equal(h.storage.get('sanda1-last-room'), 'another-room');
+});
 
 test('client receives absolute hand count once and clears only played selection',()=>{
   const h=frontendHarness();

@@ -107,6 +107,7 @@
             <button id="copy-link-btn" class="btn btn-small btn-secondary" title="复制邀请链接"><img class="icon" src="assets/icons/link.svg" alt=""><span>邀请好友</span></button>
             <button id="toggle-history-btn" class="btn btn-small btn-secondary" aria-expanded="false" aria-controls="play-history" title="出牌记录"><img class="icon" src="assets/icons/history.svg" alt=""><span>牌局记录</span></button>
             <button id="toggle-chat-btn" class="btn btn-small btn-secondary" aria-expanded="true" aria-controls="chat-box" title="房间聊天"><img class="icon" src="assets/icons/message-circle.svg" alt=""><span>聊天</span></button>
+            <button id="leave-room-btn" class="btn btn-small btn-secondary" title="退出房间" aria-label="退出房间"><img class="icon" src="assets/icons/log-out.svg" alt=""></button>
           </div>
           <div class="game-info">
             <span id="game-status">等待玩家...</span>
@@ -247,7 +248,21 @@
       <div class="modal-content">
         <h2 id="result-title">游戏结束</h2>
         <div id="result-content"></div>
-        <button id="next-game-btn" class="btn btn-primary" style="margin-top:20px;width:100%;">下一局</button>
+        <div class="modal-actions">
+          <button id="result-leave-btn" class="btn btn-secondary"><img class="icon" src="assets/icons/log-out.svg" alt=""><span>退出房间</span></button>
+          <button id="next-game-btn" class="btn btn-primary">下一局</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="leave-room-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="leave-room-title" aria-describedby="leave-room-message">
+      <div class="modal-content leave-room-dialog">
+        <h2 id="leave-room-title">退出房间？</h2>
+        <p id="leave-room-message"></p>
+        <div class="modal-actions">
+          <button id="cancel-leave-btn" class="btn btn-primary">留在房间</button>
+          <button id="confirm-leave-btn" class="btn btn-secondary"><img class="icon" src="assets/icons/log-out.svg" alt=""><span>退出房间</span></button>
+        </div>
       </div>
     </div>
 

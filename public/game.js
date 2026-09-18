@@ -1,5 +1,5 @@
 // 游戏状态
-const gameState = {
+function createInitialGameState() { return {
   socket: null,
   roomId: null,
   playerId: null,
@@ -23,12 +23,14 @@ const gameState = {
   currentRound: [],
   leadSuit: null,
   joiningRoom: false,
+  leavingRoom: false,
   playHistoryVisible: false,
   chatVisible: true,
   scoringCards: [],
   countdownTimer: null,
   countdownKey: null
-};
+}; }
+const gameState = createInitialGameState();
 
 const COUNTDOWN_SECONDS = {
   bidding: 20,
@@ -51,6 +53,12 @@ const elements = {
   closeRulesBtn: document.querySelector('#rules-modal .close-btn'),
   roomIdDisplay: document.getElementById('room-id-display'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
+  leaveRoomBtn: document.getElementById('leave-room-btn'),
+  resultLeaveBtn: document.getElementById('result-leave-btn'),
+  leaveRoomModal: document.getElementById('leave-room-modal'),
+  leaveRoomMessage: document.getElementById('leave-room-message'),
+  cancelLeaveBtn: document.getElementById('cancel-leave-btn'),
+  confirmLeaveBtn: document.getElementById('confirm-leave-btn'),
   toggleHistoryBtn: document.getElementById('toggle-history-btn'),
   toggleChatBtn: document.getElementById('toggle-chat-btn'),
   gameStatus: document.getElementById('game-status'),
@@ -202,6 +210,22 @@ function init() {
   elements.playBtn.addEventListener('click', handlePlayBtnClick);
   elements.passBtn.addEventListener('click', () => placeBid('pass'));
   elements.copyLinkBtn.addEventListener('click', copyInviteLink);
+  elements.leaveRoomBtn.addEventListener('click', requestLeaveRoom);
+  elements.resultLeaveBtn.addEventListener('click', requestLeaveRoom);
+  elements.cancelLeaveBtn.addEventListener('click', cancelLeaveRoom);
+  elements.confirmLeaveBtn.addEventListener('click', leaveRoom);
+  elements.leaveRoomModal.addEventListener('click', event => {
+    if (event.target === elements.leaveRoomModal) cancelLeaveRoom();
+  });
+  elements.leaveRoomModal.addEventListener('keydown', event => {
+    if (event.key === 'Escape') cancelLeaveRoom();
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      if (!gameState.leavingRoom) {
+        (document.activeElement === elements.cancelLeaveBtn ? elements.confirmLeaveBtn : elements.cancelLeaveBtn).focus();
+      }
+    }
+  });
   elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
   elements.toggleChatBtn.addEventListener('click', toggleChatBox);
   elements.toggleChatBtn.classList.add('active');
@@ -285,9 +309,7 @@ function connectSocket() {
         if (response?.success) {
           gameState.playerId = response.playerId;
         } else {
-          gameState.roomId = null;
-          elements.gameScreen.classList.remove('active');
-          elements.homeScreen.classList.add('active');
+          returnToLobby();
           notify('房间已结束，请重新创建或加入');
         }
       });
@@ -295,6 +317,7 @@ function connectSocket() {
   });
 
   gameState.socket.on('room-update', (room) => {
+    if (room.id !== gameState.roomId) return;
     updateRoomDisplay(room);
     syncUiForRoomState(room);
   });
@@ -469,7 +492,7 @@ function connectSocket() {
     clearCountdown();
   });
   gameState.socket.on('session-replaced', () => {
-    gameState.roomId = null;
+    returnToLobby({ clearLastRoom: false });
     notify('此座位已在其他窗口登录，请重新加入');
   });
 
@@ -557,6 +580,96 @@ function enterGame() {
   const url = new URL(window.location);
   url.searchParams.set('room', gameState.roomId);
   window.history.pushState({}, '', url);
+}
+
+function requestLeaveRoom() {
+  if (!gameState.roomId || gameState.leavingRoom) return;
+  elements.leaveRoomMessage.textContent = gameState.currentState === 'waiting'
+    ? '退出后将返回大厅并释放座位。若本局已开始，将由系统托管至本局结束。'
+    : '本局尚未结束，退出后将由系统托管至本局结束并结算，随后释放座位。本局结束前不能重新加入此房间。';
+  elements.leaveRoomModal.classList.remove('hidden');
+  elements.cancelLeaveBtn.focus();
+}
+
+function cancelLeaveRoom() {
+  if (gameState.leavingRoom) return;
+  elements.leaveRoomModal.classList.add('hidden');
+  (elements.resultModal.classList.contains('hidden') ? elements.leaveRoomBtn : elements.resultLeaveBtn).focus();
+}
+
+function setLeaveBusy(busy) {
+  gameState.leavingRoom = busy;
+  elements.confirmLeaveBtn.disabled = busy;
+  elements.cancelLeaveBtn.disabled = busy;
+  elements.confirmLeaveBtn.querySelector('span').textContent = busy ? '正在退出…' : '退出房间';
+}
+
+function leaveRoom() {
+  if (!gameState.roomId || gameState.leavingRoom) return;
+  const socket = gameState.socket;
+  const roomId = gameState.roomId;
+  if (!socket?.connected) {
+    notify('连接中断，请等待重连后再退出房间');
+    return;
+  }
+  setLeaveBusy(true);
+  socket.timeout(5000).emit('leave-room', { roomId }, (error, response) => {
+    if (gameState.socket !== socket || gameState.roomId !== roomId) return;
+    setLeaveBusy(false);
+    if (error || !response?.success) {
+      notify(error ? '未收到退出确认，请重试' : response?.error || '退出失败，请重试');
+      elements.confirmLeaveBtn.focus();
+      return;
+    }
+    returnToLobby();
+    notify('已退出房间');
+  });
+}
+
+function returnToLobby({ clearLastRoom = true } = {}) {
+  clearCountdown();
+  clearTimeout(gameState.noticeTimer);
+  clearTimeout(gameState.bottomAnimationTimer);
+  const { socket, sessionId, playerName, roomId } = gameState;
+  Object.assign(gameState, createInitialGameState(), { sessionId, playerName, currentBidder: 0, roundResolving: false });
+  socket?.removeAllListeners();
+  socket?.disconnect();
+  if (clearLastRoom && localStorage.getItem('sanda1-last-room') === roomId) {
+    localStorage.removeItem('sanda1-last-room');
+  }
+  const url = new URL(window.location);
+  url.searchParams.delete('room');
+  window.history.replaceState({}, '', url);
+  setJoinBusy(false);
+  setLeaveBusy(false);
+  elements.gameScreen.classList.remove('active');
+  elements.homeScreen.classList.add('active');
+  elements.gameScreen.dataset.state = 'waiting';
+  elements.roomIdInput.value = '';
+  elements.chatInput.value = '';
+  elements.joinRoomBtn.setAttribute('aria-expanded', 'false');
+  elements.toggleHistoryBtn.setAttribute('aria-expanded', 'false');
+  elements.toggleHistoryBtn.classList.remove('active');
+  elements.toggleChatBtn.setAttribute('aria-expanded', 'true');
+  elements.toggleChatBtn.classList.add('active');
+  elements.chatBox.classList.remove('hidden');
+  for (const panel of [elements.joinRoomPanel, elements.resultModal, elements.leaveRoomModal,
+    elements.bidPanel, elements.trumpPanel, elements.bottomCardsPanel, elements.bidHistory,
+    elements.scorePanel, elements.trumpDisplay, elements.tableBottomDeck, elements.earlyFinishPanel,
+    elements.playHistory]) panel.classList.add('hidden');
+  for (const panel of [elements.myHand, elements.bottomCardsDisplay, elements.playedCardsArea,
+    elements.bidList, elements.playHistoryList, elements.chatMessages, elements.resultContent]) panel.innerHTML = '';
+  for (let seat = 0; seat < 4; seat += 1) clearSeatDisplay(seat);
+  document.querySelectorAll('.player-seat').forEach(seat => seat.classList.remove('active'));
+  elements.readyBtn.textContent = '准备';
+  elements.readyBtn.disabled = false;
+  elements.readyBtn.classList.remove('hidden');
+  elements.teamScore.textContent = '0';
+  elements.targetScore.textContent = '100';
+  renderScoringCards([]);
+  configurePlayButton('play');
+  updateActionButton();
+  elements.playerNameInput.focus();
 }
 
 function updateRoomDisplay(room) {
@@ -714,7 +827,7 @@ function updateSeatDisplay(seatIndex, player) {
 
     seatEl.classList.toggle('disconnected', !!player.disconnected);
     if (player.disconnected) {
-      seatEl.querySelector('.player-status').textContent = '离线 · 托管';
+      seatEl.querySelector('.player-status').textContent = player.leftRoom ? '已退出 · 托管' : '离线 · 托管';
     } else if (player.isReady) {
       seatEl.querySelector('.player-status').textContent = '已准备';
     } else if (player.isDealer) {
@@ -1299,7 +1412,8 @@ function animateBottomDeckToDealer(dealerIndex) {
   const directionClasses = ['move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left'];
   elements.tableBottomDeck.classList.remove('move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left');
   elements.tableBottomDeck.classList.add(directionClasses[relativeSeat] || 'move-to-top');
-  setTimeout(() => {
+  clearTimeout(gameState.bottomAnimationTimer);
+  gameState.bottomAnimationTimer = setTimeout(() => {
     elements.tableBottomDeck.classList.add('hidden');
     elements.tableBottomDeck.classList.remove('move-to-bottom', 'move-to-right', 'move-to-top', 'move-to-left');
   }, 700);
