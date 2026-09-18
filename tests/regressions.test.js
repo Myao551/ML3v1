@@ -238,6 +238,7 @@ function frontendHarness() {
     querySelector() { return new Element(); }
     querySelectorAll() { return []; }
     addEventListener() {}
+    setAttribute(name, value) { this[name] = String(value); }
     remove() {}
   }
   const nodes=new Map(); const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};

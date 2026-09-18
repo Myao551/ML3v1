@@ -177,20 +177,26 @@ function init() {
   if (roomIdFromUrl) {
     elements.roomIdInput.value = roomIdFromUrl;
     elements.joinRoomPanel.classList.remove('hidden');
+    elements.joinRoomBtn.setAttribute('aria-expanded', 'true');
   }
 
   // 事件监听
   elements.createRoomBtn.addEventListener('click', createRoom);
   elements.joinRoomBtn.addEventListener('click', () => {
     elements.joinRoomPanel.classList.toggle('hidden');
+    const expanded = !elements.joinRoomPanel.classList.contains('hidden');
+    elements.joinRoomBtn.setAttribute('aria-expanded', String(expanded));
+    if (expanded) elements.roomIdInput.focus();
   });
   elements.confirmJoinBtn.addEventListener('click', joinRoom);
   elements.showRulesBtn.addEventListener('click', (e) => {
     e.preventDefault();
     elements.rulesModal.classList.remove('hidden');
+    elements.closeRulesBtn.focus();
   });
   elements.closeRulesBtn.addEventListener('click', () => {
     elements.rulesModal.classList.add('hidden');
+    elements.showRulesBtn.focus();
   });
   elements.readyBtn.addEventListener('click', toggleReady);
   elements.playBtn.addEventListener('click', handlePlayBtnClick);
@@ -241,6 +247,16 @@ function init() {
   window.addEventListener('click', (e) => {
     if (e.target === elements.rulesModal) {
       elements.rulesModal.classList.add('hidden');
+      elements.showRulesBtn.focus();
+    }
+  });
+  elements.rulesModal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      elements.rulesModal.classList.add('hidden');
+      elements.showRulesBtn.focus();
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      elements.closeRulesBtn.focus();
     }
   });
 
@@ -547,6 +563,9 @@ function updateRoomDisplay(room) {
   gameState.players = room.players;
   gameState.currentState = room.state;
   elements.gameScreen.dataset.state = room.state;
+  document.getElementById('waiting-count').textContent = room.players.length === 4
+    ? '好友已到齐，准备开始吧'
+    : `${room.players.length} / 4 人已入座`;
   if (room.settlementSettings) {
     elements.baseScoreInput.value = room.settlementSettings.baseScore;
     elements.levelScoreInput.value = room.settlementSettings.levelScore;
@@ -781,6 +800,7 @@ function renderHand() {
   gameState.hand.forEach((card, index) => {
     const cardEl = createCardElement(card, index);
     cardEl.classList.toggle('selected', selectedIds.has(card.id));
+    cardEl.setAttribute('aria-pressed', String(selectedIds.has(card.id)));
     elements.myHand.appendChild(cardEl);
   });
   updateActionButton();
@@ -796,7 +816,12 @@ function getCardColorClass(card) {
 }
 
 function createCardElement(card, index) {
-  const cardEl = document.createElement('div');
+  const cardEl = document.createElement('button');
+  cardEl.type = 'button';
+  cardEl.setAttribute('aria-pressed', 'false');
+  cardEl.setAttribute('aria-label', card.suit === 'joker'
+    ? (card.rank === 'big' ? '大王' : '小王')
+    : `${getSuitName(card.suit)} ${card.rank}`);
   cardEl.className = `card ${card.suit} ${getCardColorClass(card)}`;
   cardEl.dataset.cardId = card.id;
   cardEl.dataset.index = index;
@@ -812,10 +837,10 @@ function createCardElement(card, index) {
   } else {
     const suitSymbol = getSuitSymbol(card.suit);
     cardEl.innerHTML = `
-      <span class="corner top">${escapeHtml(card.rank)}${suitSymbol}</span>
+      <span class="corner top"><b>${escapeHtml(card.rank)}</b><span>${suitSymbol}</span></span>
       <span class="rank">${escapeHtml(card.rank)}</span>
       <span class="suit">${suitSymbol}</span>
-      <span class="corner bottom">${escapeHtml(card.rank)}${suitSymbol}</span>
+      <span class="corner bottom"><b>${escapeHtml(card.rank)}</b><span>${suitSymbol}</span></span>
     `;
   }
 
@@ -840,6 +865,7 @@ function toggleCardSelection(card, cardEl) {
     cardEl.classList.remove('selected');
   }
 
+  cardEl.setAttribute('aria-pressed', String(cardEl.classList.contains('selected')));
   updateActionButton();
 }
 
@@ -940,9 +966,9 @@ function chooseTrump(suit, isNoTrump) {
 // 更新主牌显示
 function updateTrumpDisplay(suit, isNoTrump) {
   elements.trumpDisplay.classList.remove('hidden');
+  elements.trumpDisplay.dataset.suit = isNoTrump ? 'notrump' : suit;
   if (isNoTrump) {
-    elements.trumpDisplay.innerHTML = '<span>\ud83c\udccf \u65e0\u4e3b</span>';
-    elements.trumpDisplay.style.background = 'linear-gradient(135deg, #64748b, #334155)';
+    elements.trumpDisplay.textContent = '无主';
   } else {
     const suitInfo = {
       spades: { symbol: '\u2660', name: '\u9ed1\u6843', color: '#111827' },
@@ -953,7 +979,6 @@ function updateTrumpDisplay(suit, isNoTrump) {
     const info = suitInfo[suit];
     if (!info) return;
     elements.trumpDisplay.innerHTML = `<span class="trump-symbol">${info.symbol}</span><span>\u4e3b\u724c\uff1a${info.name}</span>`;
-    elements.trumpDisplay.style.background = `linear-gradient(135deg, ${info.color}, #0f172a)`;
   }
 }
 
@@ -1205,13 +1230,14 @@ function togglePlayHistory() {
   gameState.playHistoryVisible = !gameState.playHistoryVisible;
   elements.playHistory.classList.toggle('hidden', !gameState.playHistoryVisible);
   elements.toggleHistoryBtn.classList.toggle('active', gameState.playHistoryVisible);
+  elements.toggleHistoryBtn.setAttribute('aria-expanded', String(gameState.playHistoryVisible));
 }
 
 function toggleChatBox() {
   gameState.chatVisible = !gameState.chatVisible;
   elements.chatBox.classList.toggle('hidden', !gameState.chatVisible);
   elements.toggleChatBtn.classList.toggle('active', gameState.chatVisible);
-  elements.toggleChatBtn.textContent = gameState.chatVisible ? '\u804a\u5929\u6846' : '\u804a\u5929\u5173';
+  elements.toggleChatBtn.setAttribute('aria-expanded', String(gameState.chatVisible));
 }
 
 function clearSeatPlayPiles() {
@@ -1375,9 +1401,9 @@ function copyInviteLink() {
   const url = new URL(window.location);
   url.searchParams.set('room', gameState.roomId);
   navigator.clipboard.writeText(url.toString()).then(() => {
-    elements.copyLinkBtn.textContent = '\u5df2\u590d\u5236';
+    elements.copyLinkBtn.querySelector('span').textContent = '已复制';
     setTimeout(() => {
-      elements.copyLinkBtn.textContent = '\u590d\u5236\u9080\u8bf7';
+      elements.copyLinkBtn.querySelector('span').textContent = '邀请好友';
     }, 2000);
   }).catch(() => notify(`复制失败，房间号：${gameState.roomId}`));
 }
