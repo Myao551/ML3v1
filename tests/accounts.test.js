@@ -68,6 +68,25 @@ test('production refuses ephemeral account storage', async () => {
   await assert.rejects(openAccountStore({ production: true }), /DATABASE_URL/);
 });
 
+test('database URL validation rejects relative and incomplete values without leaking credentials', async () => {
+  for (const databaseUrl of ['3v1database', 'DATABASE_URL=postgresql://user:private-password@host/db',
+    'https://user:private-password@host/db', 'postgresql:///db', 'postgresql://host', 'postgresql://host/']) {
+    await assert.rejects(openAccountStore({ production: true, databaseUrl }), error => {
+      assert.match(error.message, /DATABASE_URL must be a complete/);
+      assert.doesNotMatch(error.message, /private-password/);
+      return true;
+    });
+  }
+});
+
+test('database URL validation accepts PostgreSQL schemes and surrounding whitespace', async () => {
+  for (const databaseUrl of ['postgres://user:password@host/db', '  postgresql://user:password@host/db?sslmode=require  ']) {
+    const pool = new (newDb().adapters.createPg().Pool)();
+    const store = await openAccountStore({ production: true, databaseUrl, pool });
+    try { assert.equal(await store.findUser('missing'), undefined); } finally { await store.close(); }
+  }
+});
+
 async function httpHarness(t, production = false) {
   const store = await openAccountStore({ sqlitePath: ':memory:' });
   const auth = await createAuthService(store);

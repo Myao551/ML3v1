@@ -104,6 +104,8 @@ Node Version: 24
 
 首次启动自动创建 `auth_users` 和 `auth_sessions` 表及索引；数据库用户需要建表和读写权限。生产模式缺少数据库或域名配置会拒绝启动，不会退回临时文件“假持久化”。`render.yaml` 不会创建收费数据库，配置值需在控制台填写。
 
+`DATABASE_URL` 的值必须是完整的 `postgres://` 或 `postgresql://` 连接串，不能填写数据库显示名称、数据库 ID，也不要把 `DATABASE_URL=` 一起粘进值中。游戏和 Render 数据库处于同一工作区、同一区域时，从数据库的 **Connect** 页面复制 **Internal Database URL**；外部数据库则使用供应商提供的连接串及 TLS 参数。
+
 部署后验收：注册一个测试账号，退出后重新登录；重新部署 Web Service，再次用同一账号登录；旧房间消失属于当前设计，账号不应丢失。备份和恢复应使用 PostgreSQL 服务商的备份功能或 `pg_dump` / `pg_restore`，不要把备份提交到 Git。
 
 Render 会自动提供 `PORT` 环境变量，`server.js` 已经通过下面的方式读取端口：

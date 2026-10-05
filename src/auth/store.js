@@ -19,16 +19,25 @@ const SCHEMA = [
  * @param {{ databaseUrl?: string; sqlitePath?: string; production?: boolean; pool?: import('pg').Pool }} options
  */
 async function openAccountStore(options = {}) {
-  if (options.production && !options.databaseUrl && !options.pool) {
+  const databaseUrl = options.databaseUrl?.trim();
+  if (options.production && !databaseUrl && !options.pool) {
     throw new Error('DATABASE_URL is required in production. Ephemeral local storage cannot preserve accounts on Render.');
+  }
+  if (databaseUrl) {
+    // pg accepts relative URLs and resolves them against postgres://base.
+    let parsed;
+    try { parsed = new URL(databaseUrl); } catch { /* Report only the expected format, never credentials. */ }
+    if (!parsed || !['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || parsed.pathname.length < 2) {
+      throw new Error('DATABASE_URL must be a complete postgres:// or postgresql:// URL with a hostname and database name. Copy the Internal Database URL from your Render database Connect page.');
+    }
   }
   /** @type {(sql: string, values?: any[]) => Promise<any[]>} */
   let query;
   /** @type {() => Promise<void>} */
   let close;
-  if (options.databaseUrl || options.pool) {
+  if (databaseUrl || options.pool) {
     const { Pool } = require('pg');
-    const pool = options.pool || new Pool({ connectionString: options.databaseUrl, max: 5, connectionTimeoutMillis: 10000 });
+    const pool = options.pool || new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 10000 });
     pool.on('error', () => console.error('Account database connection error'));
     query = async (sql, values = []) => (await pool.query(sql, values)).rows;
     close = () => pool.end();
