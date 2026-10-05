@@ -32,14 +32,16 @@ const { registerRoomLifecycleEvents } = require('./src/socket/room-events');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
+const io = socketIo(server);
 
 app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+  next();
+});
 app.use(express.json({ limit: '16kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -331,6 +333,23 @@ function scheduleTurn(room) {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+async function startServer() {
+  const { openAccountStore } = require('./src/auth/store');
+  const { createAuthService } = require('./src/auth/service');
+  const { installAccountRoutes } = require('./src/http/account-routes');
+  const production = process.env.NODE_ENV === 'production';
+  const publicOrigin = process.env.PUBLIC_ORIGIN;
+  if (production && (!publicOrigin || new URL(publicOrigin).origin !== publicOrigin || !publicOrigin.startsWith('https://'))) {
+    throw new Error('PUBLIC_ORIGIN must be the HTTPS origin of the deployed game, without a trailing slash.');
+  }
+  const store = await openAccountStore({ databaseUrl: process.env.DATABASE_URL, sqlitePath: process.env.SQLITE_PATH, production });
+  const auth = await createAuthService(store);
+  installAccountRoutes({ app, io, auth, rooms, production, publicOrigin });
+  server.listen(PORT, () => console.log(`Server running on port ${server.address().port}`));
+  const shutdown = () => { io.close(() => { store.close().finally(() => process.exit(0)); }); };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+}
+if (typeof module !== 'undefined' && require.main === module) {
+  startServer().catch(error => { console.error('Server startup failed:', error.message); process.exit(1); });
+}

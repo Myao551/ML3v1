@@ -58,9 +58,10 @@ function harness() {
   }
   vm.runInContext(fs.readFileSync(serverPath, 'utf8'), context);
   const rooms = vm.runInContext('rooms', context);
-  function connect(id) {
+  function connect(id, userId = id) {
     const handlers = {};
     const socket = { id, handlers, nsp: { sockets }, events: [], roomId: null,
+      data: { user: { id: userId, displayName: /^s\d$/.test(userId) ? `P${userId.slice(1)}` : id } },
       on(event, handler) { handlers[event] = handler; }, join() {}, leave() {},
       emit(event, data) { this.events.push({ event, data }); },
       disconnect() { handlers.disconnect(); },
@@ -69,7 +70,7 @@ function harness() {
     sockets.set(id, socket); connection(socket); return socket;
   }
   function fourPlayers() {
-    const players = Array.from({ length: 4 }, (_, i) => connect(`p${i}`));
+    const players = Array.from({ length: 4 }, (_, i) => connect(`p${i}`, `s${i}`));
     let roomId;
     players[0].send('create-room', { name: 'P0', sessionId: 's0' }, response => { roomId = response.roomId; });
     players.slice(1).forEach((socket, i) => socket.send('join-room', roomId, { name: `P${i + 1}`, sessionId: `s${i + 1}` }, () => {}));
@@ -79,6 +80,60 @@ function harness() {
   function fire(id) { const timer = timers.get(id); assert.ok(timer, `timer ${id} exists`); timers.delete(id); time = Math.max(time, timer.at); timer.fn(); }
   return { context, rooms, timers, connect, fourPlayers, fire, broadcasts, run(code) { return vm.runInContext(code, context); } };
 }
+
+test('quick seat prefers fuller waiting rooms and resumes the authenticated seat', () => {
+  const h = harness();
+  const first = h.connect('first'); const second = h.connect('second');
+  first.send('create-room', {}, () => {}); second.send('create-room', {}, () => {});
+  h.connect('guest').send('join-room', second.roomId, {}, () => {});
+  const joining = h.connect('joining');
+  joining.send('quick-join', response => { assert.equal(response.success, true); assert.equal(response.roomId, second.roomId); });
+  assert.equal(h.rooms.get(second.roomId).players.length, 3);
+  const replacement = h.connect('replacement', 'joining');
+  replacement.send('quick-join', response => { assert.equal(response.rejoined, true); assert.equal(response.roomId, second.roomId); });
+  assert.equal(h.rooms.get(second.roomId).players.length, 3);
+  assert.equal(joining.roomId, null);
+});
+
+test('quick seat rejects empty/full/active rooms but allows recovery of an active seat', () => {
+  const h = harness(); const guest = h.connect('guest');
+  guest.send('quick-join', response => assert.equal(response.success, false));
+  const { players, room } = h.fourPlayers();
+  guest.send('quick-join', response => assert.equal(response.success, false));
+  const replacement = h.connect('replacement', 's0');
+  replacement.send('quick-join', response => assert.equal(response.success, true));
+  replacement.send('leave-room', { roomId: room.id }, () => {});
+  replacement.send('quick-join', response => assert.equal(response.success, false));
+  room.state = 'waiting';
+  guest.send('quick-join', response => assert.equal(response.success, false));
+  assert.equal(room.players.length, 4);
+  assert.equal(players[0].roomId, null);
+});
+
+test('hints return only legal current-player card IDs and never mutate or broadcast a play', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[0].send('suggest-play', response => assert.equal(response.success, false));
+  players[0].send('place-bid', 75);
+  players[0].send('finish-exchange', room.players[0].hand.slice(0, 8).map(c => c.id));
+  players[0].send('choose-trump', null, true);
+  h.connect('outsider').send('suggest-play', response => assert.equal(response.success, false));
+  players[1].send('suggest-play', response => assert.equal(response.success, false));
+  const before = JSON.stringify(room.players.map(p => p.hand)); const emitted = h.broadcasts.length;
+  let hint;
+  players[0].send('suggest-play', response => { hint = response; });
+  assert.equal(hint.success, true);
+  assert.equal(validatePlay(room, resolveCards(room.players[0].hand, hint.cardIds), 0).valid, true);
+  assert.equal(JSON.stringify(room.players.map(p => p.hand)), before);
+  assert.equal(h.broadcasts.length, emitted);
+  assert.equal(room.currentRound.length, 0);
+  players[0].send('play-cards', hint.cardIds);
+  players[1].send('suggest-play', response => {
+    assert.equal(response.success, true);
+    assert.equal(validatePlay(room, resolveCards(room.players[1].hand, response.cardIds), 1).valid, true);
+  });
+  room.roundResolving = true;
+  players[1].send('suggest-play', response => assert.equal(response.success, false));
+});
 
 test('authoritative faces replace forged play and bottom payloads', () => {
   const original = card('hearts', '3');
@@ -158,7 +213,7 @@ test('repeat create cannot leak rooms; replacing a socket detaches the old conne
   const h = harness(); const { players, room } = h.fourPlayers();
   players[0].send('create-room', { name: 'other' }, response => assert.equal(response.success, false));
   assert.equal(h.rooms.size, 1);
-  const replacement = h.connect('replacement');
+  const replacement = h.connect('replacement', 's0');
   replacement.send('rejoin-room', { roomId: room.id, sessionId: 's0' }, response => assert.equal(response.success, true));
   assert.equal(players[0].roomId, null);
   assert.equal(room.players[0].id, 'replacement');
@@ -192,7 +247,7 @@ test('waiting leave releases a seat, preserves the next bidder and permits anoth
   const newRoomId = players[1].roomId;
   players[1].send('leave-room', { roomId: room.id }, response => assert.equal(response.success, false));
   assert.equal(players[1].roomId, newRoomId);
-  const replacement = h.connect('replacement');
+  const replacement = h.connect('replacement', 'new');
   replacement.send('join-room', room.id, { name: 'New', sessionId: 'new' }, response => assert.equal(response.success, true));
   assert.equal(room.players.length, 4);
 });
@@ -238,7 +293,7 @@ test('active leave preserves seats, uses autoplay and never sends private cards 
 test('explicit leavers cannot resume mid-game and all-pass cleanup advances to a remaining bidder', () => {
   const h = harness(); const { players, room } = h.fourPlayers();
   players[0].send('leave-room', { roomId: room.id }, () => {});
-  const replacement = h.connect('replacement');
+  const replacement = h.connect('replacement', 's0');
   replacement.send('rejoin-room', { roomId: room.id, sessionId: 's0' }, response => assert.equal(response.success, false));
   replacement.send('join-room', room.id, { name: 'P0', sessionId: 's0' }, response => assert.equal(response.success, false));
   h.fire(room.turnTimer);
@@ -268,7 +323,7 @@ test('leaving after peers disconnect retains their reconnect window but cleans u
   players.slice(1).forEach(socket => socket.disconnect());
   players[0].send('leave-room', { roomId: room.id }, () => {});
   assert.ok(h.timers.has(room.cleanupTimer));
-  const replacement = h.connect('replacement');
+  const replacement = h.connect('replacement', 's1');
   replacement.send('rejoin-room', { roomId: room.id, sessionId: 's1' }, response => assert.equal(response.success, true));
   assert.equal(room.cleanupTimer, null);
   replacement.disconnect();
@@ -306,7 +361,7 @@ test('disconnect shortens turn to 2 seconds, reconnect keeps deadline without ex
   players[0].disconnect();
   assert.equal(h.timers.get(room.turnTimer).delay, 2000);
   const deadline = room.deadline;
-  const replacement = h.connect('new');
+  const replacement = h.connect('new', 's0');
   replacement.send('rejoin-room', { roomId: room.id, sessionId: 's0' }, () => {});
   assert.equal(room.deadline, deadline);
 });
@@ -330,7 +385,7 @@ for (const phase of ['waiting', 'bidding', 'exchanging', 'choosing-trump', 'play
       players[index].disconnect();
       const removalTimer = room.players[index].disconnectTimer;
       const deadline = room.deadline;
-      const fresh = h.connect(`restored-${index}`);
+      const fresh = h.connect(`restored-${index}`, `s${index}`);
       fresh.send('rejoin-room', { roomId: room.id, sessionId: `s${index}` }, response => {
         assert.equal(response.success, true);
         assert.equal(response.playerId, fresh.id);
@@ -367,14 +422,14 @@ test('waiting disconnect expires after 60 seconds but an active seat survives th
   h.fire(room.players[1].disconnectTimer);
   assert.equal(room.players.length, 3);
   assert.equal(room.players.some(player => player.sessionId === 's1'), false);
-  const replacement = h.connect('expired');
+  const replacement = h.connect('expired', 's1');
   replacement.send('rejoin-room', { roomId: room.id, sessionId: 's1' }, response => assert.equal(response.success, false));
 });
 
 test('refresh join restores a full active room by session and rejects unknown sessions', () => {
   const h = harness(); const { players, room } = h.fourPlayers();
   players[2].disconnect();
-  const fresh = h.connect('refresh');
+  const fresh = h.connect('refresh', 's2');
   fresh.send('join-room', room.id, { name: 'P2', sessionId: 's2' }, response => {
     assert.equal(response.success, true); assert.equal(response.rejoined, true);
   });
@@ -433,6 +488,26 @@ function frontendHarness() {
   vm.runInContext("connectSocket(); gameState.players = [{name:'玩家',isDealer:false}]; gameState.seat = 0;",ctx);
   return {nodes,get,handlers,timers,socket,emissions,storage,location,run(code){return vm.runInContext(code,ctx);}};
 }
+
+test('client hint selects without playing and ignores stale or manually superseded suggestions', () => {
+  for (const change of ['', "gameState.currentPlayer=1", "gameState.roomId='new'", 'gameState.hand=[]',
+    'gameState.selectedCards=[gameState.hand[1]]', 'gameState.socket=null']) {
+    const h = frontendHarness();
+    h.run("gameState.roomId='old'; gameState.currentState='playing'; gameState.hand=[{id:'a',suit:'hearts',rank:'3'},{id:'b',suit:'hearts',rank:'4'}]; renderHand=()=>updateActionButton(); suggestPlay(); suggestPlay();");
+    assert.equal(h.emissions.length, 1);
+    assert.equal(h.emissions[0][0], 'suggest-play');
+    h.run(change);
+    h.emissions[0][1](null, { success: true, cardIds: ['a'] });
+    assert.equal(h.run("gameState.selectedCards.some(card=>card.id==='a')"), !change);
+    assert.equal(h.emissions.length, 1);
+  }
+  const h = frontendHarness();
+  h.run("gameState.currentState='playing'; suggestPlay();");
+  h.emissions[0][1](new Error('timeout'));
+  assert.equal(h.run('gameState.hintRequest'), null);
+  h.socket.connected = false; h.run('suggestPlay();');
+  assert.equal(h.emissions.length, 1);
+});
 
 test('client confirms leave then resets room state, storage, URL, socket and panels', () => {
   const h = frontendHarness();

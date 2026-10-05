@@ -10,46 +10,69 @@
 <body>
   <div id="app">
 
-    <!-- 首页 -->
-    <div id="home-screen" class="screen active">
+    <div id="loading-screen" class="screen active auth-screen">
+      <div class="auth-content"><h1>三打一</h1><p id="startup-status" role="status">正在连接…</p><button id="auth-retry-btn" class="btn btn-primary hidden">重试</button></div>
+    </div>
+    <div id="login-screen" class="screen auth-screen">
+      <main class="auth-content">
+        <div class="app-brand"><span class="brand-suit" aria-hidden="true">♠</span> 三打一</div><h1>登录</h1>
+        <form id="login-form">
+          <div class="input-group"><label for="login-username">账号</label><input id="login-username" autocomplete="username" maxlength="24" required placeholder="输入账号"></div>
+          <div class="input-group"><label for="login-password">密码</label><input id="login-password" type="password" autocomplete="current-password" maxlength="128" required placeholder="输入密码"></div>
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button id="login-submit-btn" type="submit" class="btn btn-primary"><img class="icon" src="assets/icons/log-in.svg" alt="">登录</button>
+        </form>
+        <button id="show-register-btn" class="text-button">还没有账号？注册账号</button>
+      </main>
+    </div>
+    <div id="register-screen" class="screen auth-screen">
+      <main class="auth-content">
+        <div class="app-brand"><span class="brand-suit" aria-hidden="true">♠</span> 三打一</div><h1>注册账号</h1>
+        <form id="register-form">
+          <div class="input-group"><label for="register-username">账号</label><input id="register-username" autocomplete="username" pattern="[A-Za-z0-9_]{3,24}" minlength="3" maxlength="24" required placeholder="3–24 位字母、数字或下划线"></div>
+          <div class="input-group"><label for="register-name">玩家昵称</label><input id="register-name" autocomplete="nickname" maxlength="12" required placeholder="1–12 个字符"></div>
+          <div class="input-group"><label for="register-password">密码</label><input id="register-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="至少 8 位"></div>
+          <div class="input-group"><label for="register-confirm">确认密码</label><input id="register-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="再次输入密码"></div>
+          <p id="register-error" class="form-error" role="alert"></p>
+          <button id="register-submit-btn" type="submit" class="btn btn-primary"><img class="icon" src="assets/icons/plus.svg" alt="">注册并进入大厅</button>
+        </form>
+        <button id="show-login-btn" class="text-button">已有账号？返回登录</button>
+      </main>
+    </div>
+    <div id="home-screen" class="screen">
       <header class="home-header">
         <div class="app-brand"><span class="brand-suit" aria-hidden="true">♠</span> 三打一 <span class="brand-divider"></span><span class="brand-mode">好友场</span></div>
-        <button id="show-rules" class="btn btn-small btn-white"><img class="icon" src="assets/icons/book-open.svg" alt="">游戏规则</button>
+        <div class="lobby-account"><div><strong id="account-name"></strong><span id="account-username"></span></div><button id="show-rules" class="btn btn-small btn-white" title="游戏规则" aria-label="游戏规则"><img class="icon" src="assets/icons/book-open.svg" alt=""></button><button id="logout-btn" class="btn btn-small btn-white" title="退出登录" aria-label="退出登录"><img class="icon" src="assets/icons/log-out.svg" alt=""></button></div>
       </header>
-      <div class="home-container">
-        <div class="brand-mark" aria-hidden="true">
-          <span class="brand-card red"><b>7</b><span>♥</span></span>
-          <span class="brand-card black"><b>2</b><span>♠</span></span>
-          <span class="brand-card joker"><b>王</b><span>♦</span></span>
-        </div>
-
-        <h1>三打一</h1>
-        <p class="subtitle">好朋友，来一局！</p>
-
-        <div class="input-group">
-          <label for="player-name">玩家昵称</label>
-          <input type="text" id="player-name" placeholder="输入昵称" maxlength="12" autocomplete="nickname">
-        </div>
-
-        <div id="home-settlement-settings" class="home-settlement-settings">
-          <label>底分 <input type="number" id="base-score-input" min="0" step="1" value="1"></label>
-          <label>加分 <input type="number" id="level-score-input" min="0" step="1" value="1"></label>
-        </div>
-
-        <div class="button-group">
-          <button id="create-room-btn" class="btn btn-primary"><img class="icon" src="assets/icons/plus.svg" alt="">创建房间</button>
-          <button id="join-room-btn" class="btn btn-blue" aria-expanded="false" aria-controls="join-room-panel"><img class="icon" src="assets/icons/log-in.svg" alt="">加入房间</button>
-        </div>
-
+      <main class="lobby-content">
+        <div class="lobby-heading"><h1>游戏大厅</h1><div class="lobby-actions">
+          <button id="quick-join-btn" class="btn btn-secondary"><img class="icon" src="assets/icons/log-in.svg" alt="">快速入座</button>
+          <button id="join-room-btn" class="btn btn-secondary" aria-expanded="false" aria-controls="join-room-panel"><img class="icon" src="assets/icons/log-in.svg" alt="">房间号加入</button>
+          <button id="open-create-btn" class="btn btn-primary" aria-expanded="false" aria-controls="create-room-panel"><img class="icon" src="assets/icons/plus.svg" alt="">创建房间</button>
+        </div></div>
+        <section id="create-room-panel" class="lobby-create hidden" aria-label="创建房间">
+          <div id="home-settlement-settings" class="home-settlement-settings"><label>底分 <input type="number" id="base-score-input" min="0" step="1" value="1"></label><label>加分 <input type="number" id="level-score-input" min="0" step="1" value="1"></label></div>
+          <button id="create-room-btn" class="btn btn-primary"><img class="icon" src="assets/icons/plus.svg" alt="">开一桌</button>
+        </section>
         <div id="join-room-panel" class="join-panel hidden">
           <label for="room-id">房间号</label>
           <div class="join-row">
-            <input type="text" id="room-id" placeholder="输入房间号" autocomplete="off">
+            <input type="text" id="room-id" placeholder="输入房间号" autocomplete="off" maxlength="8">
             <button id="confirm-join-btn" class="btn btn-primary">进入</button>
           </div>
         </div>
 
-      </div>
+        <section class="room-browser" aria-label="房间列表">
+          <div class="room-browser-toolbar">
+            <div class="room-search-field"><img class="icon" src="assets/icons/search.svg" alt=""><input id="room-search" type="search" aria-label="搜索房间号或房主" placeholder="搜索房间号或房主" maxlength="64" autocomplete="off"></div>
+            <label class="available-filter"><input id="available-rooms" type="checkbox">只看可加入</label>
+            <button id="refresh-rooms-btn" class="btn btn-secondary" aria-label="刷新房间" title="刷新房间"><img class="icon" src="assets/icons/refresh-cw.svg" alt=""></button>
+          </div>
+          <div class="lobby-list-head" aria-hidden="true"><span>房间 / 房主</span><span>人数</span><span>大小</span><span>状态</span><span></span></div>
+          <ul id="room-list" class="lobby-room-list"></ul>
+          <div class="lobby-list-footer"><p id="lobby-status" role="status">正在读取房间…</p><nav class="room-pagination" aria-label="房间分页"><button id="rooms-prev-btn" class="btn btn-small btn-secondary" disabled aria-label="上一页" title="上一页"><img class="icon" src="assets/icons/chevron-left.svg" alt=""></button><span id="rooms-page">1 / 1</span><button id="rooms-next-btn" class="btn btn-small btn-secondary" disabled aria-label="下一页" title="下一页"><img class="icon" src="assets/icons/chevron-right.svg" alt=""></button></nav></div>
+        </section>
+      </main>
       <footer class="home-footer"><span>四人一桌</span><span class="footer-suits" aria-hidden="true">♠ <i>♥</i> ♣ <i>♦</i></span><span>好牌好心情</span></footer>
     </div>
 
@@ -202,7 +225,8 @@
           <div class="hand-caption"><span>我的手牌</span><span id="selection-count" aria-live="polite">已选 0 张</span></div>
           <div id="my-hand" class="hand-cards"></div>
           <div class="hand-actions">
-            <button id="clear-selection-btn" class="btn btn-secondary"><img class="icon" src="assets/icons/undo-2.svg" alt="">取消选择</button>
+            <button id="hint-btn" class="btn btn-secondary hidden" title="出牌提示"><img class="icon" src="assets/icons/lightbulb.svg" alt="">提示</button>
+            <button id="clear-selection-btn" class="btn btn-secondary" aria-label="取消选择" title="取消选择"><img class="icon" src="assets/icons/undo-2.svg" alt=""></button>
             <button id="play-btn" class="btn btn-primary hidden">出牌</button>
             <button id="ready-btn" class="btn btn-primary">准备</button>
           </div>
@@ -270,6 +294,7 @@
 
   <div id="game-notice" class="game-notice hidden" role="status" aria-live="polite"></div>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="account-lobby.js"></script>
   <script type="module" src="game.js"></script>
 </body>
 </html>

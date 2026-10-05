@@ -1,6 +1,6 @@
 ﻿// @ts-check
 
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('node:crypto');
 const {
   createRoom,
   normalizeSettlementSettings
@@ -21,24 +21,6 @@ const { removeWaitingPlayers } = require('../game/room-state');
  *   scheduleTurn(room: any): void;
  * }} RoomLifecycleDeps
  */
-
-/**
- * @param {unknown} name
- * @returns {string}
- */
-function normalizePlayerName(name) {
-  return typeof name === 'string' ? name.trim().slice(0, 12) : '';
-}
-
-/**
- * @param {unknown} sessionId
- * @returns {string}
- */
-function normalizeSessionId(sessionId) {
-  return typeof sessionId === 'string' && sessionId.trim()
-    ? sessionId.trim().slice(0, 80)
-    : uuidv4();
-}
 
 /**
  * @param {GameSocket} socket
@@ -125,6 +107,13 @@ function sendPrivateState(socket, room, player, getRoomState) {
  * @param {RoomLifecycleDeps} deps
  */
 function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGame, scheduleTurn }) {
+  // Identity comes only from the authenticated handshake, never from room payloads.
+  const user = socket.data?.user;
+  /** @param {string} [exceptRoom] */
+  function otherRoom(exceptRoom) {
+    return [...rooms.values()].find(room => room.id !== exceptRoom && room.players.some(
+      (/** @type {any} */ player) => player.sessionId === user?.id && !player.leftRoom));
+  }
   /** @param {any} room */
   function deleteRoom(room) {
     clearTimeout(room.cleanupTimer);
@@ -145,15 +134,15 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
 
   socket.on('create-room', (playerPayload, callback = () => {}) => {
     if (typeof callback !== 'function') return;
+    if (!user) { callback({ success: false, error: '请先登录' }); return; }
     if (socket.roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
-    const playerName = normalizePlayerName(playerPayload?.name);
-    const sessionId = normalizeSessionId(playerPayload?.sessionId);
-    if (!playerName) {
-      callback({ success: false, error: '请输入昵称' });
-      return;
-    }
+    const active = otherRoom();
+    if (active) { callback({ success: false, error: `请先返回房间 ${active.id} 并退出`, activeRoomId: active.id }); return; }
+    const playerName = user.displayName;
+    const sessionId = user.id;
 
-    const roomId = uuidv4().slice(0, 8);
+    let roomId;
+    do { roomId = randomUUID().slice(0, 8); } while (rooms.has(roomId));
     const room = /** @type {any} */ (createRoom(roomId));
     room.settlementSettings = normalizeSettlementSettings(
       /** @type {{ settlementSettings?: unknown } | null | undefined} */ (playerPayload)?.settlementSettings
@@ -180,15 +169,19 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
     io.to(roomId).emit('room-update', getRoomState(room));
   });
 
-  socket.on('join-room', (roomId, playerPayload, callback = () => {}) => {
+  /** @param {string} roomId @param {any} playerPayload @param {(result: any) => void} callback */
+  function joinRoom(roomId, playerPayload, callback = () => {}) {
     if (typeof callback !== 'function') return;
-    if (socket.roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
-    const playerName = normalizePlayerName(playerPayload?.name);
-    const sessionId = normalizeSessionId(playerPayload?.sessionId);
+    if (!user) { callback({ success: false, error: '请先登录' }); return; }
+    if (socket.roomId && socket.roomId !== roomId) { callback({ success: false, error: '已在房间中，请先离开当前房间' }); return; }
+    const active = otherRoom(roomId);
+    if (active) { callback({ success: false, error: `请先返回房间 ${active.id} 并退出`, activeRoomId: active.id }); return; }
+    const playerName = user.displayName;
+    const sessionId = user.id;
     const room = rooms.get(String(roomId || ''));
 
     if (!room) {
-      callback({ success: false, error: 'Room not found' });
+      callback({ success: false, error: '房间不存在或已结束' });
       return;
     }
 
@@ -246,16 +239,29 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
 
     callback({ success: true, roomId, playerId: socket.id, sessionId: player.sessionId });
     io.to(room.id).emit('room-update', getRoomState(room));
+  }
+  socket.on('join-room', joinRoom);
+
+  socket.on('quick-join', (callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    if (!user) { callback({ success: false, error: '请先登录' }); return; }
+    const room = otherRoom() || [...rooms.values()]
+      .filter(candidate => candidate.state === 'waiting' && candidate.players.length < 4 &&
+        !candidate.players.some((/** @type {any} */ player) => player.sessionId === user.id))
+      .sort((a, b) => b.players.length - a.players.length)[0];
+    if (!room) { callback({ success: false, error: '暂无可加入的房间，可以先创建一桌' }); return; }
+    joinRoom(room.id, null, callback);
   });
 
   socket.on('rejoin-room', (data, callback = () => {}) => {
     if (typeof callback !== 'function') return;
+    if (!user) { callback({ success: false }); return; }
     if (socket.roomId && socket.roomId !== data?.roomId) { callback({ success: false }); return; }
     const roomId = data?.roomId;
-    const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : null;
+    const sessionId = user.id;
     const room = rooms.get(roomId);
 
-    if (!room || !sessionId) {
+    if (!room || otherRoom(roomId)) {
       callback({ success: false });
       return;
     }
@@ -297,7 +303,7 @@ function registerRoomLifecycleEvents({ io, socket, rooms, getRoomState, startGam
         player.disconnected = true;
         player.isReady = false;
         // Private game events must never reach this socket in its next room.
-        player.id = `left-${uuidv4()}`;
+        player.id = `left-${randomUUID()}`;
       }
       if (room.players.every((/** @type {any} */ candidate) => candidate.leftRoom)) {
         deleteRoom(room);

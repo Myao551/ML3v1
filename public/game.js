@@ -23,6 +23,7 @@ function createInitialGameState() { return {
   currentRound: [],
   leadSuit: null,
   joiningRoom: false,
+  hintRequest: null,
   leavingRoom: false,
   playHistoryVisible: false,
   chatVisible: true,
@@ -31,6 +32,7 @@ function createInitialGameState() { return {
   countdownKey: null
 }; }
 const gameState = createInitialGameState();
+let accountUser = null;
 
 const COUNTDOWN_SECONDS = {
   bidding: 20,
@@ -42,8 +44,9 @@ const COUNTDOWN_SECONDS = {
 const elements = {
   homeScreen: document.getElementById('home-screen'),
   gameScreen: document.getElementById('game-screen'),
-  playerNameInput: document.getElementById('player-name'),
   createRoomBtn: document.getElementById('create-room-btn'),
+  quickJoinBtn: document.getElementById('quick-join-btn'),
+  hintBtn: document.getElementById('hint-btn'),
   joinRoomBtn: document.getElementById('join-room-btn'),
   joinRoomPanel: document.getElementById('join-room-panel'),
   roomIdInput: document.getElementById('room-id'),
@@ -105,11 +108,7 @@ const elements = {
 };
 
 function getSessionId() {
-  let sessionId = localStorage.getItem('sanda1-session-id');
-  if (!sessionId) {
-    sessionId = crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('');
-    localStorage.setItem('sanda1-session-id', sessionId);
-  }
+  const sessionId = accountUser?.id || null;
   gameState.sessionId = sessionId;
   return sessionId;
 }
@@ -118,6 +117,7 @@ function getSessionId() {
 function setJoinBusy(isBusy) {
   gameState.joiningRoom = isBusy;
   elements.createRoomBtn.disabled = isBusy;
+  elements.quickJoinBtn.disabled = isBusy;
   elements.joinRoomBtn.disabled = isBusy;
   elements.confirmJoinBtn.disabled = isBusy;
 }
@@ -160,6 +160,8 @@ function updateActionButton() {
   const count = gameState.selectedCards.length;
   document.getElementById('selection-count').textContent = gameState.isExchanging ? `已选 ${count} / 8 张底牌` : `已选 ${count} 张`;
   const canPlay = gameState.currentState === 'playing' && gameState.currentPlayer === gameState.seat && !gameState.roundResolving;
+  elements.hintBtn.classList.toggle('hidden', !canPlay);
+  elements.hintBtn.disabled = !gameState.socket?.connected || !canPlay || !!gameState.hintRequest;
   elements.playBtn.classList.toggle('hidden', !gameState.isExchanging && !canPlay);
   elements.playBtn.disabled = !gameState.socket?.connected || (gameState.isExchanging ? count !== 8 : !canPlay || count === 0);
 }
@@ -190,6 +192,8 @@ function init() {
 
   // 事件监听
   elements.createRoomBtn.addEventListener('click', createRoom);
+  elements.quickJoinBtn.addEventListener('click', quickJoinRoom);
+  elements.hintBtn.addEventListener('click', suggestPlay);
   elements.joinRoomBtn.addEventListener('click', () => {
     elements.joinRoomPanel.classList.toggle('hidden');
     const expanded = !elements.joinRoomPanel.classList.contains('hidden');
@@ -284,9 +288,18 @@ function init() {
     }
   });
 
-  elements.homeScreen.classList.add('active');
-  elements.playerNameInput.value = localStorage.getItem('sanda1-player-name') || '';
-  if (roomIdFromUrl && localStorage.getItem('sanda1-last-room') === roomIdFromUrl && elements.playerNameInput.value) joinRoom();
+  window.accountLobby = new window.AccountLobby({
+    onAuthenticated(user) {
+      accountUser = user;
+      gameState.playerName = user.displayName;
+      gameState.sessionId = user.id;
+      const invitedRoom = new URLSearchParams(window.location.search).get('room');
+      if (invitedRoom) { elements.roomIdInput.value = invitedRoom; joinRoom(); }
+    },
+    onJoin(roomId) { elements.roomIdInput.value = roomId; joinRoom(); },
+    onAuthLost() { accountUser = null; returnToLobby(); }
+  });
+  window.accountLobby.start();
 }
 
 // 连接服务器
@@ -488,6 +501,8 @@ function connectSocket() {
   });
   gameState.socket.on('disconnect', () => {
     elements.gameStatus.textContent = '连接中断，正在重连…';
+    gameState.hintRequest = null;
+    updateActionButton();
     elements.playBtn.disabled = true;
     clearCountdown();
   });
@@ -495,8 +510,10 @@ function connectSocket() {
     returnToLobby({ clearLastRoom: false });
     notify('此座位已在其他窗口登录，请重新加入');
   });
+  gameState.socket.on('auth-expired', () => window.accountLobby?.expire());
 
   gameState.socket.on('connect_error' , (error) => {
+    if (error.message === 'AUTH_REQUIRED') { window.accountLobby?.expire(); return; }
     console.error('Connection error:', error);
     setJoinBusy(false);
     notify('连接服务器失败，请刷新页面重试');
@@ -506,9 +523,9 @@ function connectSocket() {
 // 创建房间
 function createRoom() {
   if (gameState.joiningRoom) return;
-  const name = elements.playerNameInput.value.trim();
+  const name = accountUser?.displayName;
   if (!name) {
-    notify('请输入昵称');
+    notify('请先登录');
     return;
   }
 
@@ -517,11 +534,14 @@ function createRoom() {
   setJoinBusy(true);
   connectSocket();
 
-  gameState.socket.emit('create-room', {
+  const socket = gameState.socket;
+  socket.timeout(10000).emit('create-room', {
     name,
     sessionId: gameState.sessionId,
     settlementSettings: getSettlementSettingsFromInputs()
-  }, (response) => {
+  }, (error, response) => {
+    if (socket !== gameState.socket || !accountUser) return;
+    if (error) { setJoinBusy(false); notify('创建房间超时，请重试或刷新大厅'); window.accountLobby?.loadRooms(); return; }
     if (response.success) {
       gameState.roomId = response.roomId;
       gameState.playerId = response.playerId;
@@ -536,11 +556,11 @@ function createRoom() {
 
 function joinRoom() {
   if (gameState.joiningRoom) return;
-  const name = elements.playerNameInput.value.trim();
+  const name = accountUser?.displayName;
   const roomId = elements.roomIdInput.value.trim();
 
   if (!name) {
-    notify('请输入昵称');
+    notify('请先登录');
     return;
   }
   if (!roomId) {
@@ -553,7 +573,10 @@ function joinRoom() {
   setJoinBusy(true);
   connectSocket();
 
-  gameState.socket.emit('join-room', roomId, { name, sessionId: gameState.sessionId }, (response) => {
+  const socket = gameState.socket;
+  socket.timeout(10000).emit('join-room', roomId, { name, sessionId: gameState.sessionId }, (error, response) => {
+    if (socket !== gameState.socket || !accountUser) return;
+    if (error) { setJoinBusy(false); notify('加入房间超时，请重试'); return; }
     if (response.success) {
       gameState.roomId = response.roomId;
       gameState.playerId = response.playerId;
@@ -566,7 +589,30 @@ function joinRoom() {
   });
 }
 
+function quickJoinRoom() {
+  if (gameState.joiningRoom || !accountUser) return;
+  gameState.playerName = accountUser.displayName;
+  getSessionId();
+  setJoinBusy(true);
+  connectSocket();
+  const socket = gameState.socket;
+  socket.timeout(10000).emit('quick-join', (error, response) => {
+    if (socket !== gameState.socket || !accountUser) return;
+    setJoinBusy(false);
+    if (error || !response?.success) {
+      notify(error ? '入座超时，请重试' : response?.error || '入座失败，请重试');
+      window.accountLobby?.loadRooms();
+      return;
+    }
+    gameState.roomId = response.roomId;
+    gameState.playerId = response.playerId;
+    gameState.sessionId = response.sessionId;
+    enterGame();
+  });
+}
+
 function enterGame() {
+  window.accountLobby?.stop();
   [elements.homeScreen, elements.gameScreen].forEach(screen => {
     screen.classList.remove('active');
   });
@@ -669,7 +715,7 @@ function returnToLobby({ clearLastRoom = true } = {}) {
   renderScoringCards([]);
   configurePlayButton('play');
   updateActionButton();
-  elements.playerNameInput.focus();
+  window.accountLobby?.showLobby();
 }
 
 function updateRoomDisplay(room) {
@@ -980,6 +1026,33 @@ function toggleCardSelection(card, cardEl) {
 
   cardEl.setAttribute('aria-pressed', String(cardEl.classList.contains('selected')));
   updateActionButton();
+}
+
+function hintStateKey() {
+  return JSON.stringify([gameState.roomId, gameState.currentState, gameState.currentPlayer,
+    gameState.roundResolving, gameState.hand.map(card => card.id), gameState.currentRound,
+    gameState.selectedCards.map(card => card.id)]);
+}
+
+function suggestPlay() {
+  const socket = gameState.socket;
+  if (!socket?.connected || gameState.hintRequest || gameState.currentState !== 'playing' ||
+      gameState.currentPlayer !== gameState.seat || gameState.roundResolving) return;
+  const request = { key: hintStateKey() };
+  gameState.hintRequest = request;
+  updateActionButton();
+  socket.timeout(5000).emit('suggest-play', (error, response) => {
+    if (gameState.socket !== socket || gameState.hintRequest !== request) return;
+    gameState.hintRequest = null;
+    updateActionButton();
+    // Ignore delayed replies after a turn, hand, room or manual selection changed.
+    if (request.key !== hintStateKey()) return;
+    if (error || !response?.success) { notify(error ? '提示超时，请重试' : response?.error || '提示暂不可用'); return; }
+    const ids = new Set(response.cardIds);
+    if (!ids.size || ![...ids].every(id => gameState.hand.some(card => card.id === id))) return;
+    gameState.selectedCards = gameState.hand.filter(card => ids.has(card.id));
+    renderHand();
+  });
 }
 
 function playCards() {

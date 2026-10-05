@@ -14,16 +14,19 @@ function getHomeScreen() {
   return html.slice(start, end);
 }
 
-test('room entry is available without login or registration screens', () => {
+test('login, registration and the searchable lobby are separate screens', () => {
   const homeScreen = getHomeScreen();
 
-  assert.doesNotMatch(html, /id="login-screen"/);
-  assert.doesNotMatch(html, /id="register-screen"/);
-  assert.doesNotMatch(html, /id="login-submit-btn"/);
-  assert.doesNotMatch(html, /id="register-submit-btn"/);
+  assert.match(html, /id="login-screen"/);
+  assert.match(html, /id="register-screen"/);
+  assert.doesNotMatch(homeScreen, /id="login-form"|id="register-form"/);
   assert.match(homeScreen, /id="create-room-btn"/);
   assert.match(homeScreen, /id="join-room-btn"/);
-  assert.match(homeScreen, /id="player-name"/);
+  assert.match(homeScreen, /id="room-list"/);
+  assert.match(homeScreen, /id="room-search"/);
+  assert.match(homeScreen, /id="available-rooms"/);
+  assert.match(html, /autocomplete="current-password"/);
+  assert.match(html, /autocomplete="new-password"/);
   assert.match(html, /<script type="module" src="game\.js"><\/script>/);
 });
 

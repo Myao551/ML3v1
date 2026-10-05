@@ -1,6 +1,6 @@
 // @ts-check
 
-const { resolveCards } = require('../game/play-rules');
+const { resolveCards, getAutoPlay } = require('../game/play-rules');
 const { sortCardsForDisplay } = require('../game/cards');
 
 /** @typedef {import('socket.io').Server} SocketServer */
@@ -193,6 +193,19 @@ function registerGameplayEvents({
     io.to(dealer.id).emit('choose-trump-request');
     io.to(room.id).emit('waiting-trump', { dealer: room.dealer });
     scheduleTurn(room);
+  });
+
+  socket.on('suggest-play', (callback = () => {}) => {
+    if (typeof callback !== 'function') return;
+    const room = getSocketRoom(socket, rooms);
+    if (!room || room.state !== 'playing' || room.roundResolving || room.players[room.currentPlayer]?.id !== socket.id) {
+      callback({ success: false, error: '当前不是你的出牌回合' }); return;
+    }
+    const cards = getAutoPlay(room, room.currentPlayer);
+    if (!validatePlay(room, cards, room.currentPlayer).valid) {
+      callback({ success: false, error: '暂时无法给出提示，请手动选牌' }); return;
+    }
+    callback({ success: true, cardIds: cards.map(card => card.id) });
   });
 
   socket.on('play-cards', (cards) => {
