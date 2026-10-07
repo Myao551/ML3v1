@@ -26,7 +26,7 @@ function createInitialGameState() { return {
   hintRequest: null,
   leavingRoom: false,
   playHistoryVisible: false,
-  chatVisible: true,
+  chatVisible: !window.matchMedia?.('(max-width: 768px), (max-width: 1100px) and (max-height: 600px)')?.matches,
   scoringCards: [],
   countdownTimer: null,
   countdownKey: null
@@ -232,7 +232,10 @@ function init() {
   });
   elements.toggleHistoryBtn.addEventListener('click', togglePlayHistory);
   elements.toggleChatBtn.addEventListener('click', toggleChatBox);
-  elements.toggleChatBtn.classList.add('active');
+  applyChatVisibility();
+  window.matchMedia?.('(max-width: 768px), (max-width: 1100px) and (max-height: 600px)').addEventListener('change', event => {
+    if (event.matches) { gameState.chatVisible = false; applyChatVisibility(); }
+  });
   elements.sendBtn.addEventListener('click', sendChatMessage);
   elements.earlyFinishBtn.addEventListener('click', voteEndGame);
   document.getElementById('clear-selection-btn').addEventListener('click', () => { gameState.selectedCards = []; renderHand(); });
@@ -696,9 +699,7 @@ function returnToLobby({ clearLastRoom = true } = {}) {
   elements.joinRoomBtn.setAttribute('aria-expanded', 'false');
   elements.toggleHistoryBtn.setAttribute('aria-expanded', 'false');
   elements.toggleHistoryBtn.classList.remove('active');
-  elements.toggleChatBtn.setAttribute('aria-expanded', 'true');
-  elements.toggleChatBtn.classList.add('active');
-  elements.chatBox.classList.remove('hidden');
+  applyChatVisibility();
   for (const panel of [elements.joinRoomPanel, elements.resultModal, elements.leaveRoomModal,
     elements.bidPanel, elements.trumpPanel, elements.bottomCardsPanel, elements.bidHistory,
     elements.scorePanel, elements.trumpDisplay, elements.tableBottomDeck, elements.earlyFinishPanel,
@@ -952,6 +953,7 @@ function toggleReady() {
 }
 
 function renderHand() {
+  const scrollLeft = elements.myHand.scrollLeft;
   elements.myHand.innerHTML = '';
   elements.myCardCount.textContent = gameState.hand.length;
 
@@ -962,6 +964,7 @@ function renderHand() {
     cardEl.setAttribute('aria-pressed', String(selectedIds.has(card.id)));
     elements.myHand.appendChild(cardEl);
   });
+  elements.myHand.scrollLeft = scrollLeft;
   updateActionButton();
 }
 
@@ -990,7 +993,7 @@ function createCardElement(card, index) {
     cardEl.classList.add('joker', isBigJoker ? 'big-joker' : 'small-joker');
     cardEl.innerHTML = `
       <span class="joker-crown">${isBigJoker ? '\u2605' : '\u25c6'}</span>
-      <span class="joker-letter">JOKER</span>
+      <span class="joker-letter">${isBigJoker ? '\u5927\u738b' : '\u5c0f\u738b'}</span>
       <span class="joker-name">${isBigJoker ? '\u5927\u738b' : '\u5c0f\u738b'}</span>
     `;
   } else {
@@ -1172,8 +1175,8 @@ function showBottomCards(cards) {
   elements.bottomCardsDisplay.innerHTML = '';
   cards.forEach(card => {
     const cardEl = createCardElement(card);
-    cardEl.style.width = '45px';
-    cardEl.style.height = '63px';
+    cardEl.classList.add('bottom-preview-card');
+    cardEl.disabled = true;
     elements.bottomCardsDisplay.appendChild(cardEl);
   });
   elements.bottomCardsPanel.querySelector('h3').textContent = '\u5e95\u724c\uff08\u67e5\u770b\uff09';
@@ -1421,6 +1424,10 @@ function togglePlayHistory() {
 
 function toggleChatBox() {
   gameState.chatVisible = !gameState.chatVisible;
+  applyChatVisibility();
+}
+
+function applyChatVisibility() {
   elements.chatBox.classList.toggle('hidden', !gameState.chatVisible);
   elements.toggleChatBtn.classList.toggle('active', gameState.chatVisible);
   elements.toggleChatBtn.setAttribute('aria-expanded', String(gameState.chatVisible));

@@ -308,7 +308,8 @@ test('explicit leavers cannot resume mid-game and all-pass cleanup advances to a
 test('all active players leaving deletes the room including pending round settlement', () => {
   const h = harness(); const { players, room } = h.fourPlayers();
   players[0].send('place-bid', 75);
-  h.fire(room.turnTimer); h.fire(room.turnTimer);
+  players[0].send('finish-exchange', room.players[0].hand.slice(0, 8).map(card => card.id));
+  h.fire(room.turnTimer);
   for (let i = 0; i < 4; i++) players[room.currentPlayer].send('play-cards', getAutoPlay(room, room.currentPlayer));
   assert.ok(room.roundTimer);
   const staleTurn = h.timers.get(room.roundTimer).fn;
@@ -342,10 +343,12 @@ test('dealer win retains first bid, dealer loss rotates it', () => {
   assert.equal(room.nextBidder, 3);
 });
 
-test('timeout bids pass; exchange, trump and all 25 rounds complete automatically', () => {
+test('timeout bids pass; disconnected exchange, trump and all 25 rounds complete automatically', () => {
   const h = harness(); const { players, room } = h.fourPlayers();
   h.fire(room.turnTimer); assert.equal(room.passedBidders.has(0), true);
   players[1].send('place-bid', 75);
+  assert.equal(room.turnTimer, null);
+  players[1].disconnect();
   h.fire(room.turnTimer); assert.equal(room.state, 'choosing-trump');
   h.fire(room.turnTimer); assert.equal(room.state, 'playing');
   let steps = 0;
@@ -366,12 +369,50 @@ test('disconnect shortens turn to 2 seconds, reconnect keeps deadline without ex
   assert.equal(room.deadline, deadline);
 });
 
+test('connected dealer has no burial deadline, including after rescheduling', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  const oldBidTimer = h.timers.get(room.turnTimer).fn;
+  players[0].send('place-bid', 75);
+  const handBefore = JSON.stringify(room.players[0].hand);
+  assert.equal(room.state, 'exchanging');
+  assert.equal(room.deadline, null);
+  assert.equal(room.turnTimer, null);
+  assert.equal(h.timers.size, 0);
+  oldBidTimer();
+  h.run(`scheduleTurn(rooms.get('${room.id}'))`);
+  assert.equal(room.turnTimer, null);
+  assert.equal(JSON.stringify(room.players[0].hand), handBefore);
+  assert.equal(h.broadcasts.filter(event => event.event === 'turn-clock').at(-1).payload.deadline, null);
+  players[0].send('finish-exchange', room.players[0].hand.slice(0, 8).map(card => card.id));
+  assert.equal(room.state, 'choosing-trump');
+  assert.equal(h.timers.get(room.turnTimer).delay, 20000);
+});
+
+test('dealer reconnect cancels automatic burial and stale callbacks cannot bury cards', () => {
+  const h = harness(); const { players, room } = h.fourPlayers();
+  players[0].send('place-bid', 75);
+  players[0].disconnect();
+  const timerId = room.turnTimer;
+  assert.equal(h.timers.get(timerId).delay, 2000);
+  const automaticBurial = h.timers.get(timerId).fn;
+  const replacement = h.connect('restored-dealer', 's0');
+  replacement.send('rejoin-room', { roomId: room.id, sessionId: 's0' }, response => assert.equal(response.success, true));
+  assert.equal(room.deadline, null);
+  assert.equal(room.turnTimer, null);
+  assert.equal(h.timers.has(timerId), false);
+  automaticBurial();
+  assert.equal(room.state, 'exchanging');
+  assert.equal(room.players[0].hand.length, 33);
+  replacement.send('finish-exchange', room.players[0].hand.slice(0, 8).map(card => card.id));
+  assert.equal(room.state, 'choosing-trump');
+});
+
 for (const phase of ['waiting', 'bidding', 'exchanging', 'choosing-trump', 'playing', 'round-resolving']) {
   test(`reconnect restores all four seats in ${phase} without redealing or leaking private cards`, () => {
     const h = harness(); const { players, room } = h.fourPlayers();
     if (phase === 'waiting') h.run(`resetRoomForNextGame(rooms.get('${room.id}'))`);
     if (!['waiting', 'bidding'].includes(phase)) players[0].send('place-bid', 75);
-    if (['choosing-trump', 'playing', 'round-resolving'].includes(phase)) h.fire(room.turnTimer);
+    if (['choosing-trump', 'playing', 'round-resolving'].includes(phase)) players[0].send('finish-exchange', room.players[0].hand.slice(0, 8).map(card => card.id));
     if (['playing', 'round-resolving'].includes(phase)) h.fire(room.turnTimer);
     if (phase === 'playing') {
       players[0].send('play-cards', getAutoPlay(room, 0));
@@ -394,7 +435,7 @@ for (const phase of ['waiting', 'bidding', 'exchanging', 'choosing-trump', 'play
       assert.equal(room.players[index].seat, index);
       assert.equal(room.players[index].disconnected, false);
       assert.equal(h.timers.has(removalTimer), false);
-      assert.equal(room.deadline, deadline);
+      assert.equal(room.deadline, phase === 'exchanging' ? null : deadline);
       assert.equal(JSON.stringify(room.players.map(player => player.hand)), expectedHands);
       const snapshot = fresh.events.find(event => event.event === 'room-update').data;
       assert.equal(snapshot.state, room.state);
@@ -456,7 +497,7 @@ test('seeded legal fallback property: valid unique cards and preserved hand acro
   }
 });
 
-function frontendHarness() {
+function frontendHarness({ compact = false } = {}) {
   class Element {
     constructor() {
       this.children=[]; this.dataset={}; this.style={}; this._html=''; this.textContent=''; this.value='';
@@ -483,11 +524,37 @@ function frontendHarness() {
   const ctx=vm.createContext({console:{log(){}},document:{getElementById:get,querySelector:()=>new Element(),querySelectorAll:()=>[],createElement:()=>new Element(),addEventListener(){}},
     io:()=>socket,setTimeout(fn){timers.push(fn);return timers.length;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},
     localStorage:{getItem(key){return storage.get(key) ?? null;},setItem(key,value){storage.set(key,value);},removeItem(key){storage.delete(key);}},
-    URL,window:{location,history:{replaceState(_state,_title,url){location.href=String(url);}}},Date});
+    URL,window:{location,matchMedia(){return {matches:compact,addEventListener(){}};},history:{replaceState(_state,_title,url){location.href=String(url);}}},Date});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/game.js'),'utf8'),ctx);
   vm.runInContext("connectSocket(); gameState.players = [{name:'玩家',isDealer:false}]; gameState.seat = 0;",ctx);
   return {nodes,get,handlers,timers,socket,emissions,storage,location,run(code){return vm.runInContext(code,ctx);}};
 }
+
+test('compact screens start with chat collapsed and can reopen it', () => {
+  const h = frontendHarness({ compact:true });
+  h.run('applyChatVisibility()');
+  assert.equal(h.get('chat-box').classList.contains('hidden'), true);
+  assert.equal(h.get('toggle-chat-btn')['aria-expanded'], 'false');
+  h.run('toggleChatBox()');
+  assert.equal(h.get('chat-box').classList.contains('hidden'), false);
+  assert.equal(h.get('toggle-chat-btn')['aria-expanded'], 'true');
+  h.run('returnToLobby()');
+  assert.equal(h.get('chat-box').classList.contains('hidden'), true);
+});
+
+test('bottom preview uses read-only cards and jokers identify their rank on the exposed edge', () => {
+  const h = frontendHarness();
+  h.run("showBottomCards([{id:'a',suit:'hearts',rank:'10'},{id:'big',suit:'joker',rank:'big'},{id:'small',suit:'joker',rank:'small'}])");
+  const cards = h.get('bottom-cards').children;
+  assert.equal(cards.length, 3);
+  cards.forEach(card => {
+    assert.equal(card.disabled, true);
+    assert.equal(card.classList.contains('bottom-preview-card'), true);
+  });
+  assert.match(cards[1].innerHTML, /class="joker-letter">大王</);
+  assert.match(cards[2].innerHTML, /class="joker-letter">小王</);
+  assert.equal(h.run('gameState.selectedCards.length'),0);
+});
 
 test('client hint selects without playing and ignores stale or manually superseded suggestions', () => {
   for (const change of ['', "gameState.currentPlayer=1", "gameState.roomId='new'", 'gameState.hand=[]',

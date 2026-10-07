@@ -302,15 +302,17 @@ function endGame(room, reason = 'normal') {
 function scheduleTurn(room) {
   clearTimeout(room.turnTimer);
   room.turnTimer = null;
-  const durations = { bidding: 20000, exchanging: 45000, 'choosing-trump': 20000, playing: 30000 };
-  if (!durations[room.state] || room.roundResolving) {
+  const durations = { bidding: 20000, 'choosing-trump': 20000, playing: 30000 };
+  const index = room.state === 'bidding' ? room.currentBidder : room.state === 'playing' ? room.currentPlayer : room.dealer;
+  const player = room.players[index];
+  // Manual burial has no deadline; an absent dealer still needs takeover.
+  const automaticExchange = room.state === 'exchanging' && player?.disconnected;
+  if ((!durations[room.state] && !automaticExchange) || room.roundResolving) {
     room.deadline = null;
     room.turnKey = null;
     io.to(room.id).emit('turn-clock', { deadline: null, state: room.state });
     return;
   }
-  const index = room.state === 'bidding' ? room.currentBidder : room.state === 'playing' ? room.currentPlayer : room.dealer;
-  const player = room.players[index];
   const key = [room.gameNumber, room.state, index, room.bidHistory.length, room.roundScores.length, room.currentRound.length].join(':');
   const proposed = Date.now() + (player.disconnected ? 2000 : durations[room.state]);
   room.deadline = room.turnKey === key && room.deadline ? Math.min(room.deadline, proposed) : proposed;
